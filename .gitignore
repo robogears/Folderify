@@ -1,0 +1,16 @@
+node_modules/
+out/
+release/
+dist/
+*.log
+.DS_Store
+.vite/
+.eslintcache
+*.tsbuildinfo
+
+# editor / tooling
+.claude/
+
+# locally-built packaged app copies (never commit the binary)
+Folderify.app/
+/Folderify.app

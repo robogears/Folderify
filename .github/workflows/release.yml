@@ -1,0 +1,46 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-mac:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build renderer + main
+        run: npm run build
+
+      - name: Package macOS (.dmg, unsigned)
+        run: npx --no-install electron-builder --mac --publish never
+        env:
+          # No Developer ID available — skip code-signing so CI produces an
+          # unsigned .dmg instead of failing on a missing identity.
+          CSC_IDENTITY_AUTODISCOVERY: 'false'
+
+      - name: Create draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          name: ${{ github.ref_name }}
+          body_path: RELEASE_NOTES.md
+          files: |
+            release/*.dmg
+            release/*.dmg.blockmap

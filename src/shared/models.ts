@@ -1,0 +1,104 @@
+// Core data models shared between the main process (which builds them from the
+// filesystem) and the renderer (which displays them). Pure types + the IPC map.
+
+/** Reserved playlist id for audio files that sit directly in the library root. */
+export const LOOSE_PLAYLIST_ID = '__root__'
+export const LOOSE_PLAYLIST_NAME = 'Loose Tracks'
+
+export interface Track {
+  /** Stable id derived from the absolute path. */
+  id: string
+  /** Absolute on-disk path (the source of truth, exact case). */
+  path: string
+  /** Last-modified time in ms, used for cache invalidation. */
+  mtimeMs: number
+  /** File size in bytes, used (with mtime) for cache invalidation. */
+  size: number
+
+  title: string
+  artist: string
+  album: string
+  albumArtist: string
+  year: number | null
+  trackNo: number | null
+  trackOf: number | null
+  discNo: number | null
+  genre: string
+  /** Duration in seconds (float). May be null if unreadable. */
+  durationSec: number | null
+
+  /** True if the file carries embedded (or sidecar) cover art. */
+  hasArt: boolean
+  /** The detected codec, e.g. "MPEG 1 Layer 3", "ALAC", "FLAC". */
+  codec: string
+  /** True if Chromium cannot decode this codec (e.g. ALAC, AIFF). */
+  unsupported: boolean
+
+  /** Id of the playlist (first path segment under root) this track belongs to. */
+  playlistId: string
+}
+
+export interface Playlist {
+  /** Folder name, or LOOSE_PLAYLIST_ID for root-level files. */
+  id: string
+  /** Display name. */
+  name: string
+  /** Absolute path to the folder (root path for the loose playlist). */
+  path: string
+  /** Track ids contained (recursively) within this folder. */
+  trackIds: string[]
+  /** A track id whose art represents the playlist (first one with art). */
+  coverTrackId: string | null
+}
+
+export interface LibraryModel {
+  root: string | null
+  rootName: string | null
+  playlists: Playlist[]
+  tracks: Track[]
+  /** True while an initial scan/parse is in progress (transient). */
+  scanning?: boolean
+}
+
+export interface FsDelta {
+  added: Track[]
+  updated: Track[]
+  removedIds: string[]
+  /** The full, recomputed playlist list (cheap; avoids client-side diffing). */
+  playlists: Playlist[]
+}
+
+export interface ScanProgress {
+  scanned: number
+  total: number
+  done: boolean
+  phase: 'walking' | 'parsing' | 'done'
+}
+
+/** A compact snapshot of player state for the menu-bar mini player. */
+export interface PlayerSnapshot {
+  trackId: string | null
+  title: string
+  artist: string
+  hasArt: boolean
+  isPlaying: boolean
+  currentTime: number
+  duration: number
+  volume: number
+  muted: boolean
+  shuffle: boolean
+  repeat: 'off' | 'all' | 'one'
+  hasTrack: boolean
+}
+
+/** A control command sent from the menu-bar mini player to the main window. */
+export type PlayerCommand =
+  | { type: 'toggle' }
+  | { type: 'next' }
+  | { type: 'prev' }
+  | { type: 'seek'; value: number }
+  | { type: 'setVolume'; value: number }
+  | { type: 'toggleMute' }
+  | { type: 'toggleShuffle' }
+  | { type: 'cycleRepeat' }
+  | { type: 'showApp' }

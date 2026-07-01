@@ -1,0 +1,29 @@
+appId: com.folderify.app
+productName: Folderify
+# CI (softprops/action-gh-release) handles the GitHub upload; electron-builder must
+# not try to publish itself (avoids "GH_TOKEN is not set" on tag builds).
+publish: null
+directories:
+  buildResources: build
+  output: release
+files:
+  - out/**/*
+  - package.json
+mac:
+  category: public.app-category.music
+  target:
+    - target: dmg
+      arch:
+        - arm64
+        - x64
+  artifactName: ${productName}-${version}-${arch}.${ext}
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  extendInfo:
+    NSMusicFolderUsageDescription: Folderify reads your music folder to show and play your library.
+    NSDocumentsFolderUsageDescription: Folderify reads music from folders you choose.
+    NSDownloadsFolderUsageDescription: Folderify reads music from folders you choose.
+dmg:
+  artifactName: ${productName}-${version}-${arch}.${ext}

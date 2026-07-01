@@ -1,0 +1,3 @@
+// Auto-generated menu-bar (template) icon as base64 data URLs. Black w/ alpha → macOS tints it.
+export const TRAY_ICON_1X = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAALklEQVR4nGNgGAWEwH80PLAGkAWoZgDRoAeqoQfJAJJtIzvgaGIAyQA9DIYAAABvEiYNw7y92gAAAABJRU5ErkJggg=="
+export const TRAY_ICON_2X = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAWklEQVR4nO3UQQoAIQxD0d6f3ln3RbSCiRXzwe3kLRzNlFKP1hbnbwClsgBaJQHUygHoXRumAzwcGsAnv5qjAbNx+OXbGRfgOsAT34MhYOMZBHw8QkYPkVLH6mu9k2i880wKAAAAAElFTkSuQmCC"
