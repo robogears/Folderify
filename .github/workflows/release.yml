@@ -28,14 +28,27 @@ jobs:
       - name: Build renderer + main
         run: npm run build
 
-      - name: Package macOS (.dmg, unsigned)
+      - name: Package macOS (.dmg, ad-hoc signed)
         run: npx --no-install electron-builder --mac --publish never
         env:
-          # No Developer ID available — skip code-signing so CI produces an
-          # unsigned .dmg instead of failing on a missing identity.
+          # No Developer ID — electron-builder skips signing (mac.identity: null);
+          # build/after-pack.js ad-hoc signs so Gatekeeper doesn't flag "damaged".
           CSC_IDENTITY_AUTODISCOVERY: 'false'
 
+      # Always upload the built .dmgs as downloadable CI artifacts. This makes a
+      # manual "Run workflow" produce test builds without cutting a release.
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Folderify-macos-dmg
+          path: |
+            release/*.dmg
+            release/*.dmg.blockmap
+          if-no-files-found: error
+
+      # Only draft a GitHub Release on a version tag — not on manual/branch runs.
       - name: Create draft release
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           draft: true

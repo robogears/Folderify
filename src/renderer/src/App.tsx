@@ -2,6 +2,7 @@ import { useEffect, useRef, type JSX } from 'react'
 import { useLibrary, ALL_SONGS_ID } from './state/library-store'
 import { usePlayer, readLastPlayed } from './state/player-store'
 import { useSettings } from './state/settings-store'
+import { useUpdates } from './state/updates-store'
 import { Sidebar } from './components/Sidebar'
 import { TopBar } from './components/TopBar'
 import { EmptyState } from './components/EmptyState'
@@ -180,6 +181,7 @@ function MainView(): JSX.Element | null {
 
 export function App(): JSX.Element {
   const init = useLibrary((s) => s.init)
+  const initUpdates = useUpdates((s) => s.init)
   const ready = useLibrary((s) => s.ready)
   const root = useLibrary((s) => s.root)
   const tracksById = useLibrary((s) => s.tracksById)
@@ -190,7 +192,8 @@ export function App(): JSX.Element {
 
   useEffect(() => {
     init()
-  }, [init])
+    initUpdates()
+  }, [init, initUpdates])
 
   useTrayBridge()
 

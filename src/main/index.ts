@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { TRAY_ICON_1X, TRAY_ICON_2X } from './tray-icon'
 import { registerSchemes, registerProtocolHandlers } from './protocols'
 import { registerIpc } from './ipc'
+import { registerUpdater } from './updater'
 import { MetaCache } from './cache'
 import { Library } from './library/model'
 import { LibraryWatcher } from './library/watcher'
@@ -214,6 +215,7 @@ app.whenReady().then(async () => {
     isScanning: () => scanning,
     rebuild: startRebuild
   })
+  const runUpdateCheck = registerUpdater(() => mainWindow)
 
   createWindow()
   createMiniWindow()
@@ -231,6 +233,9 @@ app.whenReady().then(async () => {
     }
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('player:command', cmd)
   })
+
+  // Silent update check shortly after launch (renderer listener is attached by then).
+  setTimeout(() => void runUpdateCheck(), 2500)
 
   // Restore the previously chosen library in the background.
   // FOLDERIFY_DEFAULT_ROOT is a dev convenience for launching into a known folder

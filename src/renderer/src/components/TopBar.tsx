@@ -2,6 +2,7 @@ import { useState, type JSX } from 'react'
 import { useLibrary } from '../state/library-store'
 import { useSettings } from '../state/settings-store'
 import { SearchIcon, RefreshIcon, FolderIcon, GearIcon, CloseIcon } from './Icons'
+import { UpdateButton } from './UpdateButton'
 
 export function TopBar(): JSX.Element {
   const search = useLibrary((s) => s.search)
@@ -35,6 +36,7 @@ export function TopBar(): JSX.Element {
       </label>
 
       <div className="topbar-right no-drag">
+        <UpdateButton className="update-pill" />
         <button
           className={`icon-btn ${scanning ? 'is-spinning' : ''}`}
           title="Rescan folder"

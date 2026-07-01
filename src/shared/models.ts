@@ -91,6 +91,24 @@ export interface PlayerSnapshot {
   hasTrack: boolean
 }
 
+/** Payload for an available update (main → renderer). */
+export interface UpdateAvailable {
+  version: string
+  downloadUrl: string
+  releaseUrl: string
+}
+
+/** Result of an update check. */
+export type UpdateCheck =
+  | { status: 'available'; version: string; downloadUrl: string; releaseUrl: string }
+  | { status: 'up-to-date'; version: string }
+  | { status: 'error'; message: string }
+
+export interface UpdateProgress {
+  downloaded: number
+  total: number
+}
+
 /** A control command sent from the menu-bar mini player to the main window. */
 export type PlayerCommand =
   | { type: 'toggle' }

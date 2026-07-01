@@ -1,6 +1,14 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import type { FolderifyApi, Unsubscribe } from '../shared/api'
-import type { LibraryModel, FsDelta, ScanProgress, PlayerSnapshot, PlayerCommand } from '../shared/models'
+import type {
+  LibraryModel,
+  FsDelta,
+  ScanProgress,
+  PlayerSnapshot,
+  PlayerCommand,
+  UpdateAvailable,
+  UpdateProgress
+} from '../shared/models'
 
 function subscribe<T>(channel: string, cb: (payload: T) => void): Unsubscribe {
   const listener = (_e: IpcRendererEvent, payload: T): void => cb(payload)
@@ -22,7 +30,16 @@ const api: FolderifyApi = {
   publishPlayerState: (snapshot: PlayerSnapshot) => ipcRenderer.send('player:state', snapshot),
   onPlayerCommand: (cb: (cmd: PlayerCommand) => void) => subscribe('player:command', cb),
   sendPlayerCommand: (cmd: PlayerCommand) => ipcRenderer.send('player:command', cmd),
-  onPlayerState: (cb: (s: PlayerSnapshot) => void) => subscribe('player:state', cb)
+  onPlayerState: (cb: (s: PlayerSnapshot) => void) => subscribe('player:state', cb),
+
+  getAppVersion: () => ipcRenderer.invoke('app:version'),
+  checkForUpdates: () => ipcRenderer.invoke('update:check'),
+  canSelfInstall: () => ipcRenderer.invoke('update:can-self-install'),
+  downloadUpdate: (url: string) => ipcRenderer.invoke('update:download', url),
+  applyUpdate: () => ipcRenderer.invoke('update:apply'),
+  openExternal: (url: string) => ipcRenderer.invoke('shell:open-external', url),
+  onUpdateAvailable: (cb: (u: UpdateAvailable) => void) => subscribe('update:available', cb),
+  onUpdateProgress: (cb: (p: UpdateProgress) => void) => subscribe('update:download-progress', cb)
 }
 
 // Only the whitelisted `api` surface crosses the bridge — never raw ipcRenderer.

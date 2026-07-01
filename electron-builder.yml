@@ -3,6 +3,9 @@ productName: Folderify
 # CI (softprops/action-gh-release) handles the GitHub upload; electron-builder must
 # not try to publish itself (avoids "GH_TOKEN is not set" on tag builds).
 publish: null
+# Ad-hoc sign the .app after packing (see build/after-pack.js) so Apple Silicon
+# Gatekeeper doesn't reject the unsigned build as "damaged".
+afterPack: build/after-pack.js
 directories:
   buildResources: build
   output: release
@@ -11,19 +14,31 @@ files:
   - package.json
 mac:
   category: public.app-category.music
+  icon: build/icon.icns
+  # Skip electron-builder's signing phase; after-pack.js ad-hoc signs instead.
+  identity: null
   target:
     - target: dmg
       arch:
         - arm64
         - x64
   artifactName: ${productName}-${version}-${arch}.${ext}
-  hardenedRuntime: true
-  gatekeeperAssess: false
-  entitlements: build/entitlements.mac.plist
-  entitlementsInherit: build/entitlements.mac.plist
   extendInfo:
     NSMusicFolderUsageDescription: Folderify reads your music folder to show and play your library.
     NSDocumentsFolderUsageDescription: Folderify reads music from folders you choose.
     NSDownloadsFolderUsageDescription: Folderify reads music from folders you choose.
 dmg:
+  title: ${productName} ${version}
   artifactName: ${productName}-${version}-${arch}.${ext}
+  iconSize: 100
+  window:
+    width: 540
+    height: 380
+  contents:
+    - x: 150
+      y: 190
+      type: file
+    - x: 390
+      y: 190
+      type: link
+      path: /Applications

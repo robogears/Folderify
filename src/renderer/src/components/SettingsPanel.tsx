@@ -1,6 +1,8 @@
 import { useEffect, type JSX } from 'react'
 import { useSettings, LAYOUTS, type LayoutPreset } from '../state/settings-store'
 import { useLibrary } from '../state/library-store'
+import { useUpdates } from '../state/updates-store'
+import { UpdateButton } from './UpdateButton'
 import { CloseIcon, CheckIcon } from './Icons'
 import { pluralize } from '../lib/format'
 
@@ -69,6 +71,11 @@ export function SettingsPanel(): JSX.Element | null {
   const trackCount = useLibrary((s) => s.tracksById.size)
   const playlistCount = useLibrary((s) => s.playlists.length)
 
+  const appVersion = useUpdates((s) => s.appVersion)
+  const available = useUpdates((s) => s.available)
+  const checkState = useUpdates((s) => s.checkState)
+  const check = useUpdates((s) => s.check)
+
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent): void => {
@@ -126,6 +133,36 @@ export function SettingsPanel(): JSX.Element | null {
               label="Resume last track on launch"
               hint="Reopen to your last track, cued up where you left off."
             />
+          </section>
+
+          <section className="settings-section">
+            <h3 className="settings-section-title">Updates</h3>
+            <div className="settings-info">
+              <div className="settings-info-row">
+                <span className="settings-info-k">Version</span>
+                <span className="settings-info-v">v{appVersion || '—'}</span>
+              </div>
+            </div>
+            {available ? (
+              <div className="update-row">
+                <span className="update-row-text">Version {available.version} is available.</span>
+                <UpdateButton />
+              </div>
+            ) : (
+              <button
+                className="btn-ghost"
+                onClick={() => void check()}
+                disabled={checkState === 'checking'}
+              >
+                {checkState === 'checking'
+                  ? 'Checking…'
+                  : checkState === 'up-to-date'
+                    ? 'Up to date ✓'
+                    : checkState === 'error'
+                      ? 'Check failed — retry'
+                      : 'Check for updates'}
+              </button>
+            )}
           </section>
 
           <section className="settings-section">

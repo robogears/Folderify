@@ -1,35 +1,32 @@
-# What's new in v0.1.1
+# What's new in v0.1.2
 
-Folderify's first public build — a macOS music player where **your folders are your playlists**. Point it at a folder and every subfolder becomes a playlist, live-synced from disk. It's strictly read-only: it never moves, renames, or changes your files.
+## A proper Mac app
+- Folderify has a real app icon now, replacing the generic Electron one.
+- The build is ad-hoc code-signed, so Apple Silicon no longer rejects it as "damaged," and the `.dmg` opens to a clean drag-to-Applications window.
 
-## Library & playback
-- Your chosen folder is your library; each immediate subfolder is a playlist, built by scanning the tree recursively and watched live so changes on disk appear instantly.
-- Reads embedded tags and album art (title / artist / album / artwork), with graceful fallback to filenames when tags are missing.
-- Full player: play/pause, seek, volume, next/previous, shuffle, repeat, and a persistent now-playing bar. Plays MP3, AAC (.m4a), FLAC, OGG/Vorbis, Opus, and WAV; formats Chromium can't decode (ALAC, AIFF) are flagged "Can't play" and skipped.
-
-## Layouts & settings
-- Five layouts in Settings: **Default**, **Compact**, **Cover**, **Clean 01** (a bright, airy light theme), and **Clean 02** (a dark "listening room" with a slim icon rail and a large right-hand now-playing art panel).
-- Collapsible sidebar, and a "resume last track on launch" option.
-
-## Menu-bar mini player
-- A menu-bar icon opens a popover with album art, transport controls, a seek bar, and volume — kept in sync with the main window.
+## Automatic updates
+- Folderify checks GitHub for new versions on launch and shows an **"Update to vX.Y.Z"** pill in the top bar when one is available.
+- **Settings → Updates** shows your current version and a **Check for updates** button for on-demand checks.
+- One-click self-update: download with live progress, then **Restart to apply** — Folderify swaps in the new version and relaunches itself. No more manual re-downloading.
 
 ---
 
 # Install
 
-- **macOS (Apple Silicon)**: download `Folderify-0.1.1-arm64.dmg`, open it, and drag Folderify to Applications.
-- **macOS (Intel)**: download `Folderify-0.1.1-x64.dmg`.
+- **macOS (Apple Silicon)**: download `Folderify-0.1.2-arm64.dmg`, open it, and drag Folderify to Applications.
+- **macOS (Intel)**: download `Folderify-0.1.2-x64.dmg`.
 
-This build is unsigned and un-notarized, so on first launch macOS Gatekeeper will refuse to open it — **right-click the app → Open**, then confirm. You only need to do this once.
+The app isn't notarized yet, so macOS Gatekeeper holds it back on first launch. On macOS 15+ (Sequoia/Tahoe): try to open it once, then go to **System Settings → Privacy & Security** and click **Open Anyway**. You only do this once.
 
-Your settings, metadata cache, and album-art thumbnails live in `~/Library/Application Support/Folderify/`.
+**Upgrading from v0.1.1:** v0.1.1 predates the updater, so download this DMG manually one time. From v0.1.2 onward, updates apply themselves from inside the app.
+
+Your settings, metadata cache, and thumbnails live in `~/Library/Application Support/Folderify/`.
 
 ## Requirements
 
 - macOS 11 (Big Sur) or later.
-- No account, API key, or subscription — Folderify only reads local audio files. Cloud files that aren't downloaded locally (e.g. Dropbox online-only) must be synced to disk before they can play.
+- No account, API key, or subscription. Cloud files that aren't downloaded locally (e.g. Dropbox online-only) must be synced to disk before they can play.
 
 ---
 
-**Full Changelog**: https://github.com/robogears/Folderify/commits/v0.1.1
+**Full Changelog**: https://github.com/robogears/Folderify/compare/v0.1.1...v0.1.2

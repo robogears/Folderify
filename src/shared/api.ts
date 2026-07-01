@@ -1,4 +1,13 @@
-import type { LibraryModel, FsDelta, ScanProgress, PlayerSnapshot, PlayerCommand } from './models'
+import type {
+  LibraryModel,
+  FsDelta,
+  ScanProgress,
+  PlayerSnapshot,
+  PlayerCommand,
+  UpdateAvailable,
+  UpdateCheck,
+  UpdateProgress
+} from './models'
 
 export type Unsubscribe = () => void
 
@@ -31,4 +40,14 @@ export interface FolderifyApi {
   sendPlayerCommand(cmd: PlayerCommand): void
   /** Popover → listen for player-state updates. */
   onPlayerState(cb: (snapshot: PlayerSnapshot) => void): Unsubscribe
+
+  // --- Updates ---
+  getAppVersion(): Promise<string>
+  checkForUpdates(): Promise<UpdateCheck>
+  canSelfInstall(): Promise<boolean>
+  downloadUpdate(url: string): Promise<{ ok: boolean; error?: string }>
+  applyUpdate(): Promise<void>
+  openExternal(url: string): Promise<void>
+  onUpdateAvailable(cb: (u: UpdateAvailable) => void): Unsubscribe
+  onUpdateProgress(cb: (p: UpdateProgress) => void): Unsubscribe
 }
