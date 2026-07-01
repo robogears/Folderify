@@ -1108,9 +1108,16 @@
 /* ========================================================= Sidebar header */
 .sidebar-top {
   justify-content: space-between;
+  padding-bottom: var(--sp-3);
 }
 .collapse-btn {
   color: var(--text-faint);
+  opacity: 0;
+  transition: opacity var(--t-fast), color var(--t-fast), background var(--t-fast);
+}
+.sidebar:hover .collapse-btn,
+.collapse-btn:focus-visible {
+  opacity: 1;
 }
 
 /* ======================================================= Collapsed sidebar */

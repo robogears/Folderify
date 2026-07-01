@@ -22,6 +22,12 @@ export function Cover({ trackId, hasArt = true, size = 'sm', className }: CoverP
       decoding="async"
       draggable={false}
       alt=""
+      // On desktop the cover:// handler always resolves (placeholder fallback).
+      // On iOS before the scheme handler exists, hide the broken-image glyph so
+      // missing art shows as a clean dark tile instead.
+      onError={(e) => {
+        e.currentTarget.style.visibility = 'hidden'
+      }}
     />
   )
 }

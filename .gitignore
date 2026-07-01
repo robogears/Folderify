@@ -14,3 +14,10 @@ dist/
 # locally-built packaged app copies (never commit the binary)
 Folderify.app/
 /Folderify.app
+
+# iOS / Capacitor build output + generated native bits
+dist-mobile/
+ios/App/Pods/
+ios/App/App/public/
+ios/DerivedData/
+*.xcuserstate
