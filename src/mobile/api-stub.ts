@@ -1,7 +1,7 @@
-// PHASE 0 STUB — a fake window.api so the existing React UI renders inside the
-// iOS WebView before the native Swift plugin exists. Replaced in Phase 1 by a
-// real bridge to the Capacitor plugin. Covers/audio won't resolve yet (no
-// custom scheme handlers) — this is purely to prove the UI runs on iPhone.
+// STUB window.api — a fake library so the React UI renders in a plain browser
+// (e.g. `vite` preview of the mobile build) where no native plugin exists. On a
+// real device the native bridge (native-api.ts) is installed instead; this is the
+// non-native fallback selected by install-api.ts. Covers/audio won't resolve here.
 import type { FolderifyApi } from '@shared/api'
 import type { LibraryModel, Track, Playlist } from '@shared/models'
 
@@ -60,27 +60,28 @@ const model: LibraryModel = {
 
 const subscribe = (): (() => void) => () => {}
 
-const api: FolderifyApi = {
-  chooseFolder: async () => ({ root: '/stub' }),
-  getLibrary: async () => model,
-  rescan: async () => ({ ok: true }),
-  forget: async () => ({ ok: true }),
-  revealTrack: async () => {},
-  onLoaded: subscribe,
-  onChanged: subscribe,
-  onScanProgress: subscribe,
-  publishPlayerState: () => {},
-  onPlayerCommand: subscribe,
-  sendPlayerCommand: () => {},
-  onPlayerState: subscribe,
-  getAppVersion: async () => '0.1.3-ios',
-  checkForUpdates: async () => ({ status: 'up-to-date', version: '0.1.3-ios' }),
-  canSelfInstall: async () => false,
-  downloadUpdate: async () => ({ ok: false }),
-  applyUpdate: async () => {},
-  openExternal: async () => {},
-  onUpdateAvailable: subscribe,
-  onUpdateProgress: subscribe
+export function installStubApi(): void {
+  const api: FolderifyApi = {
+    chooseFolder: async () => ({ root: '/stub' }),
+    getLibrary: async () => model,
+    rescan: async () => ({ ok: true }),
+    forget: async () => ({ ok: true }),
+    revealTrack: async () => {},
+    onLoaded: subscribe,
+    onChanged: subscribe,
+    onScanProgress: subscribe,
+    publishPlayerState: () => {},
+    onPlayerCommand: subscribe,
+    sendPlayerCommand: () => {},
+    onPlayerState: subscribe,
+    getAppVersion: async () => '0.1.4-ios',
+    checkForUpdates: async () => ({ status: 'up-to-date', version: '0.1.4-ios' }),
+    canSelfInstall: async () => false,
+    downloadUpdate: async () => ({ ok: false }),
+    applyUpdate: async () => {},
+    openExternal: async () => {},
+    onUpdateAvailable: subscribe,
+    onUpdateProgress: subscribe
+  }
+  ;(window as unknown as { api: FolderifyApi }).api = api
 }
-
-;(window as unknown as { api: FolderifyApi }).api = api

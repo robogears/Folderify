@@ -179,6 +179,53 @@ Unsigned local builds open on double-click (no quarantine). For distribution, si
 
 Reset via the in-app folder menu → **Disconnect folder**, or delete that directory.
 
+---
+
+## iOS app (Capacitor) — `ios/`, `src/mobile/`, `vite.mobile.config.ts`
+
+The iPhone app reuses the **same React renderer + stores** inside a WKWebView via Capacitor 8
+(SPM-based, no CocoaPods). A separate Vite build (`npm run build:mobile` → `dist-mobile/`) bundles a
+mobile shell; `npm run ios:sync` copies it into `ios/App/App/public` and `npm run ios:open` opens
+Xcode. Build/run on device from Xcode (see the iOS launch notes below).
+
+- **`src/mobile/`** — `MobileApp.tsx` (native-feeling tab shell reusing SeekBar/TransportControls/etc),
+  `native-api.ts` (real `window.api` backed by the Swift plugin), `api-stub.ts` (browser fallback),
+  `install-api.ts` (picks native vs stub via `Capacitor.isNativePlatform()`). The shell drives the
+  shared `library-store`/`player-store` unchanged.
+- **Native plugin (`ios/App/App/`)** — the only code with disk access, mirroring the desktop main process:
+  - `FolderifyLibraryPlugin.swift` — `pickFolder` (folder picker), `getLibrary` (scan), `forget`.
+  - `LibraryAccess.swift` — persists a **security-scoped bookmark** for the picked folder; keeps the
+    scope open for the session; path-safety for `media://`; the id→JPEG artwork cache for `cover://`.
+  - `LibraryScanner.swift` — recursive audio enumeration + AVFoundation metadata/artwork → the same
+    `LibraryModel` (playlists = first path segment; Loose Tracks = `__root__`).
+  - `SchemeHandlers.swift` — `media://` (seekable, HTTP **Range**/206) + `cover://` (thumbnail) URL
+    scheme handlers, so `mediaUrl()`/`coverUrl()` from `@shared/ipc` resolve exactly as on desktop.
+  - `FolderifyBridgeViewController.swift` — a `CAPBridgeViewController` subclass that registers the
+    plugin and installs the scheme handlers (wired via `Main.storyboard` Custom Class = `App` module).
+
+### iOS gotchas (learned the hard way)
+
+- **App-embedded plugins are NOT auto-discovered.** Register explicitly with
+  `bridge?.registerPluginInstance(...)` in `capacitorDidLoad()`; `jsName` must equal the
+  `registerPlugin('FolderifyLibrary')` string. Symptom if missed: *"plugin not implemented on ios"*.
+- **Inject scheme handlers via `webViewConfiguration(for:)`** (not `webView(with:)`) — it runs before
+  the WKWebView is built. `media`/`cover` are custom schemes; WebKit forbids reusing http/https.
+- **iOS bookmarks differ from macOS:** create/resolve with **`[]` options** — `.withSecurityScope` is
+  macOS-only and throws on iOS. The picker URL is already security-scoped.
+- **Strip `crossorigin`** from the built module `<script>` (the `folderify-strip-crossorigin` Vite
+  plugin) — same custom-scheme/CORS rule as desktop, or the WebView shows a black screen.
+- **iOS 26 SDK requires UIScene lifecycle** (`SceneDelegate` + `UIApplicationSceneManifest`, TN3187).
+- Codec reality is broader than desktop: WebKit on iOS plays ALAC/AIFF/FLAC; only **opus/ogg** are
+  flagged `unsupported`.
+
+### iOS commands
+
+```bash
+npm run build:mobile   # vite build of the mobile shell → dist-mobile/
+npm run ios:sync       # build:mobile + cap sync ios (copies web assets, updates SPM)
+npm run ios:open       # open the Xcode project
+```
+
 ## Known limitations / future work
 
 - Files deleted while the app is **closed** leave orphaned cache entries + thumbnails (the live

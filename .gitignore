@@ -20,4 +20,6 @@ dist-mobile/
 ios/App/Pods/
 ios/App/App/public/
 ios/DerivedData/
+ios/App/build/
+ios/App/CapApp-SPM/build/
 *.xcuserstate
