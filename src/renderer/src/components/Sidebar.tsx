@@ -2,7 +2,7 @@ import type { JSX } from 'react'
 import { useLibrary, ALL_SONGS_ID } from '../state/library-store'
 import { usePlayer } from '../state/player-store'
 import { useSettings } from '../state/settings-store'
-import { Logo, HomeIcon, MusicIcon, PanelLeftIcon } from './Icons'
+import { HomeIcon, MusicIcon, PanelLeftIcon } from './Icons'
 import { Cover } from './Cover'
 import { PlayingIndicator } from './PlayingIndicator'
 import { pluralize } from '../lib/format'
@@ -42,7 +42,7 @@ export function Sidebar(): JSX.Element {
     <aside className="sidebar">
       <div className="sidebar-top drag">
         <div className="logo no-drag">
-          <Logo size={24} />
+          <span className="logo-mark" aria-hidden="true" />
           <span className="logo-word">Folderify</span>
         </div>
         <button className="icon-btn collapse-btn no-drag" onClick={toggleSidebar} title="Collapse sidebar">

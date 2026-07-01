@@ -80,12 +80,24 @@
 .sidebar-top {
   display: flex;
   align-items: center;
-  padding: 30px var(--sp-5) var(--sp-2);
+  /* extra top padding so the logo clears the macOS traffic-light buttons */
+  padding: 46px var(--sp-5) var(--sp-2);
 }
 .logo {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
+}
+.logo-mark {
+  /* The music note from the app icon, painted as a mask so it takes the theme's
+     text color (white on dark layouts, dark on the light layout). Aspect 334:432. */
+  height: 22px;
+  width: 17px;
+  display: block;
+  flex: 0 0 auto;
+  background-color: var(--text-primary);
+  -webkit-mask: url('../assets/note-mark.png') center / contain no-repeat;
+  mask: url('../assets/note-mark.png') center / contain no-repeat;
 }
 .logo-word {
   font-size: 17px;
@@ -1927,10 +1939,10 @@
   border-right: 1px solid var(--border-subtle);
   align-items: center;
 }
-/* The base .sidebar-top already pads 30px top; keep it and center the logo */
+/* Center the logo; extra top padding to clear the traffic lights at top-left */
 .app[data-layout='clean_02'] .sidebar-top {
   justify-content: center;
-  padding: 30px 0 var(--sp-2); /* reserve ~30px for traffic lights at top-left */
+  padding: 46px 0 var(--sp-2);
 }
 /* Hide all text in the rail — icons only */
 .app[data-layout='clean_02'] .logo-word,

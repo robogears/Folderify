@@ -1,22 +1,17 @@
-# What's new in v0.1.4
+# What's new in v0.1.5
 
-## Fresh app icon
-- New Folderify app icon — the music-note mark on a clean dark tile, matching the app's own look. You'll see it in the Dock, Launchpad, and wherever Folderify lives.
-- The same icon now ships on the (in-progress) iPhone build, so both platforms match.
-
-## Little things
-- Tidied the sidebar header — the collapse toggle stays out of the way and only appears on hover.
+## Matching logo
+- The sidebar logo (top-left) is now the same clean music note as the app icon, with a little more breathing room above it so it clears the window buttons. It also adapts to each layout — light on the dark themes, dark on Clean 01.
 
 ## Under the hood
-- Trimmed the shipped desktop build by moving the mobile (Capacitor) tooling to dev-only dependencies, so it's no longer bundled into the app.
-- Early groundwork for an iPhone version has landed in the repo (not part of this desktop release).
+- More iPhone groundwork landed in the repo: the native library plugin (folder access, on-device scanning, album art) — not part of this desktop release.
 
 ---
 
 # Install / update
 
 - **Already on v0.1.2 or later?** Just click the in-app **Update** button (top bar or Settings → Updates) — it downloads and self-installs. No DMG needed.
-- **Fresh install (macOS, Apple Silicon)**: download `Folderify-0.1.4-arm64.dmg`, open it, and drag Folderify to Applications.
+- **Fresh install (macOS, Apple Silicon)**: download `Folderify-0.1.5-arm64.dmg`, open it, and drag Folderify to Applications.
 
 On a fresh install, macOS Gatekeeper holds the app back on first launch (it isn't notarized). On macOS 15+: try to open it, then go to **System Settings → Privacy & Security → Open Anyway** — once only.
 
@@ -29,4 +24,4 @@ Your settings, metadata cache, and thumbnails live in `~/Library/Application Sup
 
 ---
 
-**Full Changelog**: https://github.com/robogears/Folderify/compare/v0.1.3...v0.1.4
+**Full Changelog**: https://github.com/robogears/Folderify/compare/v0.1.4...v0.1.5
