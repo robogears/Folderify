@@ -1,32 +1,29 @@
-# What's new in v0.1.2
+# What's new in v0.1.3
 
-## A proper Mac app
-- Folderify has a real app icon now, replacing the generic Electron one.
-- The build is ad-hoc code-signed, so Apple Silicon no longer rejects it as "damaged," and the `.dmg` opens to a clean drag-to-Applications window.
+## Slimmer download
+- Folderify now ships as a single **Apple Silicon** (`arm64`) build instead of separate Intel + Apple Silicon dmgs — one file, about half the size.
 
-## Automatic updates
-- Folderify checks GitHub for new versions on launch and shows an **"Update to vX.Y.Z"** pill in the top bar when one is available.
-- **Settings → Updates** shows your current version and a **Check for updates** button for on-demand checks.
-- One-click self-update: download with live progress, then **Restart to apply** — Folderify swaps in the new version and relaunches itself. No more manual re-downloading.
+## Under the hood
+- Hardened the in-app updater's release-asset matching so it keeps working across future packaging changes.
+- This is the first release that updates *into* itself from the auto-updater added in v0.1.2. If you're on v0.1.2, you should see an **"Update to v0.1.3"** pill in the top bar — click it to download and self-install.
 
 ---
 
 # Install
 
-- **macOS (Apple Silicon)**: download `Folderify-0.1.2-arm64.dmg`, open it, and drag Folderify to Applications.
-- **macOS (Intel)**: download `Folderify-0.1.2-x64.dmg`.
+- **macOS (Apple Silicon)**: download `Folderify-0.1.3-arm64.dmg`, open it, and drag Folderify to Applications.
 
-The app isn't notarized yet, so macOS Gatekeeper holds it back on first launch. On macOS 15+ (Sequoia/Tahoe): try to open it once, then go to **System Settings → Privacy & Security** and click **Open Anyway**. You only do this once.
+If you're already on **v0.1.2**, you don't need the DMG — just click the in-app **Update** button (top bar or Settings → Updates) and it installs itself.
 
-**Upgrading from v0.1.1:** v0.1.1 predates the updater, so download this DMG manually one time. From v0.1.2 onward, updates apply themselves from inside the app.
+On a fresh install, macOS Gatekeeper holds the app back on first launch (it isn't notarized). On macOS 15+: try to open it, then go to **System Settings → Privacy & Security → Open Anyway** — once only.
 
 Your settings, metadata cache, and thumbnails live in `~/Library/Application Support/Folderify/`.
 
 ## Requirements
 
-- macOS 11 (Big Sur) or later.
-- No account, API key, or subscription. Cloud files that aren't downloaded locally (e.g. Dropbox online-only) must be synced to disk before they can play.
+- macOS 11 (Big Sur) or later, on an Apple Silicon Mac.
+- No account, API key, or subscription. Intel Macs: stay on v0.1.2, or ask for a universal build.
 
 ---
 
-**Full Changelog**: https://github.com/robogears/Folderify/compare/v0.1.1...v0.1.2
+**Full Changelog**: https://github.com/robogears/Folderify/compare/v0.1.2...v0.1.3

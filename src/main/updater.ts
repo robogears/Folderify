@@ -91,11 +91,14 @@ async function getUpdateStatus(): Promise<UpdateCheck> {
   if (!isNewerVersion(release.tag_name, app.getVersion())) {
     return { status: 'up-to-date', version: app.getVersion() }
   }
-  // Match the .dmg for this Mac's architecture, e.g. "…-arm64.dmg".
+  // Prefer the .dmg for this Mac's architecture (e.g. "…-arm64.dmg"); if the
+  // release only ships a single un-suffixed .dmg, fall back to any .dmg.
   const wanted = `-${process.arch}.dmg`
-  let downloadUrl = release.html_url
-  const asset = (release.assets || []).find((a) => a.name && a.name.includes(wanted))
-  if (asset?.browser_download_url) downloadUrl = asset.browser_download_url
+  const assets = release.assets || []
+  const asset =
+    assets.find((a) => a.name && a.name.includes(wanted)) ||
+    assets.find((a) => a.name && a.name.toLowerCase().endsWith('.dmg'))
+  const downloadUrl = asset?.browser_download_url ?? release.html_url
   return {
     status: 'available',
     version: release.tag_name.replace(/^v/, ''),
