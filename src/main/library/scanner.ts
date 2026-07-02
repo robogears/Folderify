@@ -4,7 +4,7 @@ import { AUDIO_EXT } from '../../shared/audio-extensions'
 
 /**
  * Recursively walk `root` and return absolute paths of all audio files.
- * Uses opendir + Dirent (no per-file stat), skips dotfiles/dotdirs, and bounds
+ * Uses readdir with Dirents (no per-file stat), skips dotfiles/dotdirs, and bounds
  * directory-descent concurrency to avoid EMFILE on huge trees.
  */
 export function scanAudioFiles(root: string, onProgress?: (found: number) => void): Promise<string[]> {

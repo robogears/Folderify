@@ -18,35 +18,40 @@ A macOS music player where the folder you pick is your library, and every subfol
 
 ## Features
 
-- 🎵 Rich metadata + embedded album art, with filename fallback
-- ▶️ Full playback: play/pause, seek, volume, next/prev, shuffle, repeat
+- 🎵 Rich metadata + embedded album art (with folder-image and filename fallbacks)
+- ▶️ Full playback: play/pause, seek, volume, next/prev, shuffle, repeat, resume-on-launch
 - 🗂️ Folders → playlists, live-synced from disk (add/remove in Finder, see it immediately)
 - 🎨 Five layouts — Default, Compact, Cover, **Clean 01** (light) and **Clean 02** (dark "listening room")
-- 🔊 A menu-bar mini-player (art + transport + volume) synced with the app
-- ↩️ Resume your last track on launch
+- 🔊 A menu-bar mini-player (art, seek bar, transport, volume) synced with the app
+- 🔄 An in-app updater — one click downloads the new version and installs itself
+- 📱 An iPhone app is in the works (same UI, native folder access via Capacitor — in this repo under `ios/`)
 
 Plays MP3, AAC (.m4a), FLAC, OGG/Vorbis, Opus, and WAV. ALAC and AIFF can't be decoded by the underlying engine and are flagged rather than played.
 
 ## Install
 
-Grab the latest `.dmg` from [Releases](https://github.com/robogears/Folderify/releases) (`-arm64` for Apple Silicon, `-x64` for Intel), open it, and drag Folderify to Applications.
+Grab the latest `Folderify-<version>-arm64.dmg` from [Releases](https://github.com/robogears/Folderify/releases) (Apple Silicon), open it, and drag Folderify to Applications.
 
-Builds are unsigned for now, so on first launch **right-click the app → Open** to get past Gatekeeper.
+Builds are ad-hoc signed but not notarized, so macOS holds the app back on first launch — once only:
+- **macOS 15+**: try to open it, then **System Settings → Privacy & Security → Open Anyway**.
+- Older macOS: right-click the app → **Open**.
+
+After that, updates install themselves from inside the app — no dmg needed.
 
 ## Build from source
 
 ```bash
 npm install
 npm run dev          # run in development (HMR)
-npm run build:unpack # produce release/mac-*/Folderify.app
-npm run build:mac    # produce a .dmg
+npm run build:unpack # produce release/mac-arm64/Folderify.app (ad-hoc signed)
+npm run build:mac    # produce the arm64 .dmg
 ```
 
-Requires Node 20.19+ / 22+.
+Requires Node 20.19+ / 22+ and an Apple Silicon Mac for packaged builds.
 
 ## Tech
 
-Electron + React + TypeScript, built with electron-vite. No native modules (metadata via `music-metadata`, thumbnails via Electron's `nativeImage`, cache as JSON). Audio streams from disk through a custom `media://` protocol with HTTP Range support. See [CLAUDE.md](CLAUDE.md) for the full architecture.
+Electron + React + TypeScript, built with electron-vite. No native modules (metadata via `music-metadata`, thumbnails via Electron's `nativeImage`, cache as JSON). Audio streams from disk through a custom `media://` protocol with HTTP Range support. The iPhone app reuses the same React UI inside a WKWebView via Capacitor 8, with a small Swift plugin for folder access and scanning. See [CLAUDE.md](CLAUDE.md) for the full architecture.
 
 ## Data location
 

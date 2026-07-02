@@ -100,8 +100,8 @@ export function installNativeApi(): void {
     onPlayerState: () => () => {},
 
     // Updates are handled by the App Store on iOS — no in-app updater.
-    getAppVersion: async () => '0.1.4-ios',
-    checkForUpdates: async () => ({ status: 'up-to-date', version: '0.1.4-ios' }),
+    getAppVersion: async () => '0.1.5-ios',
+    checkForUpdates: async () => ({ status: 'up-to-date', version: '0.1.5-ios' }),
     canSelfInstall: async () => false,
     downloadUpdate: async () => ({ ok: false }),
     applyUpdate: async () => {},

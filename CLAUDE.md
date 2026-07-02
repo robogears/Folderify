@@ -1,9 +1,13 @@
 # Folderify — CLAUDE.md
 
-A macOS music player (Spotify-style) where **your folders are your playlists**. The app is a
-strict **read-only mirror** of the filesystem: pick a root folder = your library; each immediate
-subfolder = a playlist. Nothing is ever created/moved/renamed/deleted by the app — the filesystem
-is the single source of truth, scanned at launch and watched live while running.
+A macOS music player (Spotify-style) where **your folders are your playlists**, plus an
+**iPhone app** that reuses the same renderer via Capacitor. The app is a strict **read-only
+mirror** of the filesystem: pick a root folder = your library; each immediate subfolder = a
+playlist. Nothing is ever created/moved/renamed/deleted by the app — the filesystem is the
+single source of truth, scanned at launch and watched live while running.
+
+Current version: **0.1.5** (package.json, package-lock, and iOS `MARKETING_VERSION` are kept in
+lockstep — bump all three when releasing).
 
 ---
 
@@ -13,18 +17,29 @@ is the single source of truth, scanned at launch and watched live while running.
 - **Playlist** = the **first path segment** under the root. A file at `<root>/Techno/Artist/x.mp3`
   belongs to playlist `Techno`. A playlist contains every audio file recursively inside its subfolder.
 - **Loose Tracks** = files sitting directly in the root (no subfolder). Reserved id `__root__`
-  (`LOOSE_PLAYLIST_ID` in `src/shared/models.ts`), shown last in the sidebar.
+  (`LOOSE_PLAYLIST_ID` / `LOOSE_PLAYLIST_NAME` in `src/shared/models.ts`), pinned last in the
+  sidebar. Playlist ordering is alphabetical (case-insensitive) with Loose Tracks last; tracks
+  within a playlist sort album → discNo → trackNo (missing = 9999) → title.
 - The UI never mutates the music folder. The only writes anywhere are to the app's own data dir
-  (config, metadata cache, thumbnails).
+  (config, metadata cache, thumbnails) and the renderer's localStorage (preferences).
 
 ## Refresh / sync behavior
 
 - **Every launch** runs a full rescan (`runRebuild` in `src/main/index.ts`): re-walks the tree,
-  re-`stat`s every file, picks up additions/removals/changes.
-- The **metadata cache** (`src/main/cache.ts`) is keyed by **path + mtime + size**. Unchanged files
-  are served from cache with no re-parse and no thumbnail regen — so relaunch scans are cheap.
+  re-`stat`s every file, picks up additions/removals/changes. A `scanning` flag plus a single
+  `queuedRoot` slot serialize rebuilds; a queued root only re-runs if it differs from the one
+  just scanned.
+- The **metadata cache** (`src/main/cache.ts`) is keyed by **path + mtime + size** (JSON file,
+  `CACHE_VERSION` mismatch discards everything; saves debounced 1.5s, flushed after builds and on
+  `before-quit`). Unchanged files are served from cache with no re-parse and no thumbnail regen —
+  so relaunch scans are cheap.
 - While running, **chokidar** (`src/main/library/watcher.ts`) watches the root and emits debounced
-  deltas, so changes appear live without relaunch.
+  (400ms) batched deltas — one flush = one model recompute = one `FsDelta`. Options:
+  `ignoreInitial`, `followSymlinks: false`, `awaitWriteFinish {1500ms, poll 100ms}`; dot-files
+  skipped.
+- **Startup order** (`app.whenReady`): CSP hook → thumbs dir → cache load → watcher created →
+  protocol handlers → IPC → updater → main window + mini window + tray → player relay → 2.5s
+  delayed silent update check → restore root (`loadRoot() ?? FOLDERIFY_DEFAULT_ROOT`) → rebuild.
 
 ---
 
@@ -38,13 +53,15 @@ is the single source of truth, scanned at launch and watched live while running.
 | @vitejs/plugin-react | **^5.2** (NOT 6) | plugin-react 6 requires vite 8 |
 | typescript | **~5.9** (NOT 6) | TS 6 is breaking for this config |
 | react / react-dom | ^19.2 | |
-| zustand | ^5 | renderer state |
+| zustand | ^5 | renderer state (incl. `persist` middleware for settings) |
 | music-metadata | ^11.13 | **ESM-only** → dynamic `import()` in main |
 | chokidar | ^5 | **ESM-only** → dynamic `import()` in main |
 | electron-builder | ^26.15 | packaging |
+| @capacitor/{core,cli,ios} | ^8.4 | **devDependencies** — mobile build tooling only, never bundled into the desktop app |
 
-> Running `npm install <x>@latest` for electron / vite / typescript will pull
-> electron 43+ / vite 8 / TS 6 and **break the build**. Keep the pins above.
+> `npm install vite@latest` / `typescript@latest` / `@vitejs/plugin-react@latest` will pull
+> vite 8 / TS 6 / plugin-react 6 and **break the build**. Keep the pins above. Future electron
+> majors are untested — bump deliberately.
 
 **No native modules by design.** We deliberately avoid `better-sqlite3` and `sharp` so there's
 no `electron-rebuild` step and no `NODE_MODULE_VERSION` crashes. Instead:
@@ -59,39 +76,86 @@ These are the documented scale-up swap-ins for 10k+ track libraries (plus worker
 ## Architecture
 
 Three processes, strict security posture (`contextIsolation: true, sandbox: true,
-nodeIntegration: false`).
+nodeIntegration: false`; `setWindowOpenHandler` denies all popups).
 
 - **Main** (`src/main/`) — the only process with disk access. Owns the JSON cache, the chokidar
   watcher, the recursive scanner, the metadata/thumbnail pipeline, the filesystem→model builder,
-  and the custom protocol handlers. Validates every path stays under the root.
+  the custom protocol handlers, the **tray + mini-player window**, and the **in-app updater**.
+  Validates every path stays under the root.
 - **Preload** (`src/preload/index.ts`) — sandboxed; exposes a single typed `window.api` via
   `contextBridge`. Never exposes raw `ipcRenderer`. **Must stay CommonJS** (sandboxed preloads
   can't be ESM).
 - **Renderer** (`src/renderer/`) — React UI. No filesystem logic. Gets the model over IPC, drives a
-  plain `<audio>` element, and references all bytes through custom protocols.
+  plain `<audio>` element, and references all bytes through custom protocols. **Dual-entry**: the
+  same bundle renders `<App/>` normally or `<MiniPlayer/>` when the URL hash is `#mini`
+  (`src/renderer/src/main.tsx`).
+
+### Windows, tray, and app lifetime
+
+- **Main window**: 1280×840 (min 960×620), `titleBarStyle: 'hiddenInset'` — the sidebar header
+  pads 46px top so the logo clears the traffic lights.
+- **Mini-player window** (`createMiniWindow`): 340×234, frameless/transparent/alwaysOnTop/
+  skipTaskbar, visible on all workspaces, hides on blur; created eagerly at startup; loads the
+  renderer with `#mini`. Positioned centered under the tray icon, clamped inside the workArea.
+- **Tray** (`createTray` + `src/main/tray-icon.ts`): template-image icon (base64 PNGs, 1x+2x) so
+  macOS tints it. Left-click toggles the mini-player; right-click → Open Folderify / Quit.
+- **macOS lifetime**: closing all windows does NOT quit (menu-bar app); `window-all-closed` quits
+  only off-darwin; `activate`/tray reopens the main window.
 
 ### Custom protocols (`src/main/protocols.ts`)
 
-Registered privileged **before** `app.ready` (`registerSchemes`), handled after ready
-(`registerProtocolHandlers`).
+Registered privileged **before** `app.ready` (`registerSchemes`: media gets
+standard/secure/supportFetchAPI/stream/bypassCSP; cover/app get standard/secure/supportFetchAPI),
+handled after ready (`registerProtocolHandlers`).
 
 | Scheme | Purpose |
 |---|---|
-| `media://` | Streams seekable audio from disk via `fs.createReadStream` with manual HTTP **Range** (206) support. Self-contained — does **not** use `net.fetch`. |
-| `cover://` | Serves a JPEG thumbnail for a track id from `userData/thumbs`, or a generated placeholder SVG if none. |
-| `app://` | Serves the built renderer in production (never `file://`). Dev loads the Vite dev server. |
+| `media://` | Streams seekable audio via `fs.createReadStream` (wrapped `Readable.toWeb`) with manual HTTP **Range** support: 206 + `Content-Range` for `bytes=start-end`, 416 on invalid ranges, 200 full-stream otherwise. Sends `Accept-Ranges: bytes`, `Cache-Control: no-cache`, and `Access-Control-Allow-Origin: *`. Path traversal guarded by `safeResolveUnder()` (403 on escape). MIME by extension map. |
+| `cover://` | Serves `userData/thumbs/<id>_<sm|lg>.jpg` (`?s=sm|lg`; immutable 1y cache) or, on miss / id `placeholder`, an inline gradient+note SVG (24h cache). |
+| `app://` | Serves the built renderer from `out/renderer` in production (never `file://`) with the same traversal guard and an SPA fallback to `index.html`. Dev loads the Vite dev server. |
 
 URL helpers live in `src/shared/ipc.ts`: `mediaUrl(absPath)`, `coverUrl(trackId, 'sm'|'lg')`.
 
-### IPC contract (`src/shared/ipc.ts`, implemented in `src/main/ipc.ts` + `src/preload/index.ts`)
+### IPC surface (implemented in `src/preload/index.ts`; see `src/shared/api.ts` for `window.api`)
 
-Request/response (`invoke`): `library:choose-folder`, `library:get`, `library:rescan`,
-`library:forget`, `track:reveal`.
-Push (main→renderer): `library:loaded` (full model after a build), `library:changed` (incremental
-delta), `library:scan-progress`.
+**Library** (typed in `IpcInvokeMap`/`IpcEventMap`, `src/shared/ipc.ts`; handled in `src/main/ipc.ts`):
+- invoke: `library:choose-folder`, `library:get` (model + live `scanning` flag),
+  `library:rescan`, `library:forget`, `track:reveal` (validates string arg; `shell.showItemInFolder`).
+- push: `library:loaded` (full model after every rebuild — also sent on rebuild failure),
+  `library:changed` (`FsDelta`), `library:scan-progress` (`ScanProgress`).
 
-> Load race: the renderer attaches all three listeners **before** the first `getLibrary()` call
-> (`library-store.init`), so a `library:loaded` push can't be missed.
+**Updater** (handled in `src/main/updater.ts`; NOT in the typed maps — wired as raw strings):
+- invoke: `app:version`, `update:check`, `update:can-self-install` (darwin + packaged only),
+  `update:download`, `update:apply`, `shell:open-external` (http/https URLs only).
+- push: `update:available`, `update:download-progress`.
+
+**Mini-player relay** (fire-and-forget `ipcRenderer.send`, relayed window↔window in
+`src/main/index.ts`): main window publishes `player:state` (a `PlayerSnapshot`) → forwarded to the
+mini window; mini window sends `player:command` (a `PlayerCommand`) → forwarded to the main window,
+except `{type:'showApp'}` which main handles itself (hide popover, focus main window).
+
+> Load race: the renderer attaches all three library listeners **before** the first `getLibrary()`
+> call (`library-store.init`), so a `library:loaded` push can't be missed.
+
+### In-app updater (`src/main/updater.ts`)
+
+- **Check**: `node:https` GET `api.github.com/repos/robogears/Folderify/releases/latest` (10s
+  timeout; all failures → `status:'error'`). Version compare strips `v` and compares numeric
+  segments. Asset match: prefer a `.dmg` containing `-${process.arch}.dmg`, fall back to any
+  `.dmg`, then to the release page URL. Silent check 2.5s after launch pushes `update:available`.
+- **Download/stage**: refuses unless self-installable (darwin + packaged). Streams the dmg to
+  tmp (5 redirects max, 60s socket timeout, progress events), `hdiutil attach -nobrowse`, finds
+  the first `.app`, `ditto` copies it out (preserves xattrs/signature), detaches, deletes the dmg.
+- **Apply**: derives the running bundle from the exe path. **App Translocation guard** — if the
+  path contains `/AppTranslocation/`, install to `/Applications/<name>` instead. Writes a
+  self-deleting bash script that **double-forks** (`nohup` + `disown` + `--daemonized` re-exec) so
+  it survives app exit; logs to `~/Library/Logs/Folderify/update-<ts>.log`; waits ≤30s for the PID
+  to exit; strips quarantine (`xattr -dr`); moves old app to `.bak`; moves the new app in;
+  **re-signs ad-hoc**; relaunches via `open`; rolls back `.bak` on failure. App quits itself 500ms
+  after spawning the script.
+- The updater depends on the release asset naming contract `Folderify-<version>-arm64.dmg` — don't
+  change `artifactName` in electron-builder.yml without keeping the matcher in sync. Drafts are
+  invisible to `releases/latest`; users only see the update once the release is published.
 
 ---
 
@@ -100,137 +164,316 @@ delta), `library:scan-progress`.
 ```
 src/
   shared/                  types/consts imported by BOTH processes (use `import type` in renderer)
-    models.ts              Track, Playlist, LibraryModel, FsDelta, ScanProgress, LOOSE_PLAYLIST_ID
-    ipc.ts                 IpcInvokeMap, IpcEventMap, PROTOCOL, mediaUrl(), coverUrl()
-    api.ts                 FolderifyApi (the window.api surface)
-    audio-extensions.ts    AUDIO_EXT set, UNSUPPORTED_EXT, isAudioFile()
+    models.ts              Track, Playlist, LibraryModel, FsDelta, ScanProgress, PlayerSnapshot,
+                           PlayerCommand, UpdateAvailable/UpdateCheck/UpdateProgress,
+                           LOOSE_PLAYLIST_ID/NAME
+    ipc.ts                 IpcInvokeMap, IpcEventMap (library channels only), PROTOCOL,
+                           mediaUrl(), coverUrl()
+    api.ts                 FolderifyApi — the full 20-member window.api surface
+    audio-extensions.ts    AUDIO_EXT (24 exts), UNSUPPORTED_EXT, isAudioFile()
   main/
-    index.ts               app lifecycle, BrowserWindow, CSP, rebuild queue + scanning flag
+    index.ts               lifecycle, windows (main/mini), tray, CSP, rebuild queue, player relay
     protocols.ts           registerSchemes (pre-ready) + media/cover/app handlers
-    path-safety.ts         safeResolveUnder() — traversal guard for media://
-    ipc.ts                 ipcMain.handle registrations
-    cache.ts               MetaCache (JSON), trackIdForPath() (sha1), TrackMeta
-    thumbnails.ts          nativeImage resize → userData/thumbs/<id>_<sm|lg>.jpg
-    codecs.ts              isUnsupportedCodec() — flags ALAC/AIFF/etc.
+    path-safety.ts         safeResolveUnder() — traversal guard (resolve+relative, rejects ..)
+    ipc.ts                 library ipcMain.handle registrations
+    updater.ts             GitHub release check/download/self-install (see Updater section)
+    tray-icon.ts           template tray icon (base64 1x/2x PNGs)
+    cache.ts               MetaCache (JSON), trackIdForPath() = sha1(path) first 16 hex chars
+    thumbnails.ts          nativeImage resize → userData/thumbs/<id>_<sm|lg>.jpg (sm 256 / lg 512,
+                           JPEG q82; only the sm write determines hasArt)
+    codecs.ts              isUnsupportedCodec() — by parsed codec (ALAC/AIFF/APE/WavPack/Musepack/
+                           DSD/WMA) or container; extension fallback only when nothing parsed
     library/
-      root-store.ts        loadRoot/saveRoot config + chooseFolder() dialog
-      scanner.ts           scanAudioFiles() recursive opendir walker (bounded concurrency)
-      metadata.ts          parseTrack() = cache → music-metadata → thumbnails; mapWithConcurrency()
+      root-store.ts        loadRoot (re-stats; null if gone) / saveRoot / chooseFolder() dialog
+      scanner.ts           scanAudioFiles() — recursive readdir(withFileTypes) walker,
+                           concurrency 12, skips dot-entries, FOLLOWS symlinks
+      metadata.ts          parseTrack() = cache → music-metadata → thumbnails; sidecar folder-art
+                           fallback (cover/folder/front/album/albumart*.jpg|jpeg|png|webp|gif,
+                           memoized per dir); parse errors fall back to filename + ext-flagging
       model.ts             Library class: tracks Map, playlist derivation, build/upsert/remove
-      watcher.ts           LibraryWatcher: chokidar + debounced batched deltas
-  preload/index.ts         contextBridge.exposeInMainWorld('api', …)
+                           (remove also deletes thumbs + cache entry; reset() does NOT)
+      watcher.ts           LibraryWatcher: chokidar + 400ms debounced batched deltas,
+                           followSymlinks:false
+  preload/index.ts         contextBridge.exposeInMainWorld('api', …) — all channels wired here
   renderer/
     index.html
     src/
-      main.tsx, App.tsx, env.d.ts
-      audio/engine.ts      HTMLAudioElement wrapper — NO Web Audio, NO crossOrigin (see gotchas)
-      state/library-store.ts  zustand: model + selection + search; init() wires IPC
-      state/player-store.ts    zustand: queue/shuffle/repeat/volume; bridges engine events
-      lib/format.ts        time/duration/pluralize/NFC-normalize helpers
-      styles/               tokens.css (design system), global.css, keyframes.css, app.css
-      components/           Sidebar, TopBar, FolderHero, TrackList/TrackRow, AlbumGrid,
-                            NowPlayingBar, SeekBar, VolumeSlider, TransportControls,
-                            EmptyState, Cover, PlayingIndicator, Icons
+      main.tsx             dual entry: '#mini' hash → MiniPlayer, else App
+      App.tsx              splash → EmptyState → app shell; search/Home/All Songs views;
+                           resume-last-track effect; data-layout/data-sidebar attributes
+      env.d.ts
+      tray-bridge.ts       useTrayBridge(): publishes PlayerSnapshot (discrete changes + 500ms
+                           clock), applies incoming PlayerCommands
+      audio/engine.ts      HTMLAudioElement wrapper — NO Web Audio, NO crossOrigin (see gotchas);
+                           prepare(url, time) = load-paused-and-seek; VBR Infinity-duration fix;
+                           rAF time loop throttled ~33ms
+      state/library-store.ts  zustand: model + selection (+ALL_SONGS_ID) + search; init() wires IPC
+      state/player-store.ts    queue/originalQueue/shuffle/repeat/volume; findPlayable() skips
+                               unsupported tracks; engine errors auto-skip; persists
+                               folderify.volume + folderify.lastplayed
+      state/settings-store.ts  layout preset + sidebarCollapsed + resumeLastTrack, persisted via
+                               zustand persist ('folderify.settings'); transient settingsOpen
+      state/updates-store.ts   update check/download/apply state machine for the UI
+      lib/format.ts        formatTime, formatDurationLong, pluralize, normalizeSearch (NFC)
+      assets/note-mark.png the app-icon music note (CSS-mask source for the sidebar logo)
+      styles/              tokens.css (design system), global.css, keyframes.css, app.css
+                           (all layout variants live here, keyed off [data-layout])
+      components/          Sidebar, TopBar, FolderHero, TrackList/TrackRow, AlbumGrid,
+                           NowPlayingBar, SeekBar, VolumeSlider, TransportControls, EmptyState,
+                           Cover, PlayingIndicator, Icons, MiniPlayer, SettingsPanel, UpdateButton
+  mobile/                  iPhone shell (see iOS section)
+build/
+  after-pack.js            ad-hoc signing hook (xattr -cr + codesign --force --deep --sign -)
+  entitlements.mac.plist   currently INERT (not referenced by any signing step; kept for a future
+                           Developer ID + hardened-runtime build)
+  icon.icns / icon.png     app icon — white note on dark squircle
+.github/workflows/release.yml  CI (see Shipping section)
+RELEASE_NOTES.md           the release body (body_path in CI) — rewrite per release
 ```
+
+---
+
+## Renderer features
+
+### Layouts (`settings-store.ts` + `app.css`)
+
+`LayoutPreset = 'default' | 'compact' | 'cover' | 'clean_01' | 'clean_02'`, applied as
+`data-layout` on the root `.app` div (alongside `data-sidebar="collapsed|expanded"`):
+
+- **default** — album-art grid, comfortable rows.
+- **compact** — denser rows (44px), smaller art, denser grid.
+- **cover** — bigger artwork everywhere, 68px rows.
+- **clean_01** — full **light theme** via CSS-variable overrides (paper `#fbfbfd`, indigo accent).
+- **clean_02** — dark "listening room": re-grids the app to 3 columns — 64px icon-rail sidebar |
+  content | 340px full-height now-playing **panel** (the bottom bar becomes the right column).
+
+### Settings & persistence (all renderer localStorage, in userData via Chromium)
+
+- `folderify.settings` — layout, sidebarCollapsed, resumeLastTrack (zustand persist; transient
+  `settingsOpen` excluded).
+- `folderify.volume` — 0..1 slider value (default 0.8; engine applies a perceptual `v*v` curve;
+  mute zeroes the element while preserving the slider value).
+- `folderify.lastplayed` — `{trackId, time}`, saved on track start/pause/pagehide. Resume: after
+  the library loads, if enabled and the track still exists, `restore()` rebuilds the queue from
+  its playlist and `engine.prepare()`s it **paused** at the saved position.
+- These keys are NOT cleared by "Disconnect folder".
+
+### Mini-player / update UI
+
+- `MiniPlayer.tsx` holds no player state — renders the last `PlayerSnapshot`, sends
+  `PlayerCommand`s (toggle/next/prev/seek/setVolume/toggleMute/toggleShuffle/cycleRepeat/showApp).
+  Includes cover art (click → showApp), seek bar, volume, shuffle/repeat.
+- `UpdateButton.tsx` renders in the TopBar (pill) and Settings → Updates. States: "Get vX" (no
+  self-install → opens release page), "Update to vX" → "Downloading N%" → "Restart to apply" →
+  "Updating…", "Download failed — retry". Renders null when no update.
+- `SettingsPanel.tsx` — modal (gear in TopBar, Escape/backdrop closes): Layout cards + sidebar
+  toggle, Playback (resume toggle), Updates (version + check/update), Library stats.
 
 ---
 
 ## ⚠️ Gotchas / landmines (learned the hard way)
 
 - **Never set `crossOrigin` on media loaded from a custom scheme, and don't route it through the
-  Web Audio API.** Custom schemes (`media://`) can't satisfy CORS; `audio.crossOrigin='anonymous'`
-  forces a CORS request the renderer blocks → MediaError 4 → every track fails. This caused the
-  original "fluttering, no sound" bug. Volume is controlled directly via `audio.volume` (perceptual
-  `v*v` curve) in `src/renderer/src/audio/engine.ts`.
-- **music-metadata and chokidar are ESM-only.** They're loaded via dynamic `await import()` in the
-  main process and left **external** (not bundled) by `externalizeDepsPlugin`. Don't `require()` them.
-- **Codec reality:** Chromium decodes mp3 / aac(.m4a) / flac / vorbis / opus / wav. It does **NOT**
-  decode **ALAC** or **AIFF** (a `.m4a` may be either — distinguished by the parsed container codec).
-  Unsupported tracks are flagged `unsupported` (`codecs.ts`) and shown with a "Can't play" badge;
-  playback navigation skips them.
-- **CSP** is set as an HTTP response header via `session.webRequest.onHeadersReceived` in production
-  only; dev relies on the Vite dev server (a strict CSP breaks HMR).
+  Web Audio API.** `audio.crossOrigin='anonymous'` forced a CORS mode the renderer blocked →
+  MediaError 4 → every track failed (the original "fluttering, no sound" bug). The media handler
+  now sends `Access-Control-Allow-Origin: *`, which would *probably* allow Web Audio routing, but
+  the engine deliberately still avoids it — do not re-introduce crossOrigin/Web Audio without
+  testing actual playback. Volume is `audio.volume` with a perceptual `v*v` curve.
+- **music-metadata and chokidar are ESM-only.** Loaded via dynamic `await import()` in main and
+  left **external** (not bundled) by `externalizeDepsPlugin`. Don't `require()` them. (The
+  chokidar import has a `.watch ?? .default.watch` interop shim.)
+- **Codec reality (desktop):** Chromium decodes mp3 / aac(.m4a) / flac / vorbis / opus / wav. It
+  does **NOT** decode **ALAC** or **AIFF** (a `.m4a` may be either — distinguished by the parsed
+  container codec in `codecs.ts`). Unsupported tracks get a "Can't play" badge; playback
+  navigation (`findPlayable`) skips them; engine errors auto-skip to the next track.
+- **CSP** is set as an HTTP response header via `session.webRequest.onHeadersReceived` in
+  production only; dev relies on the Vite dev server (a strict CSP breaks HMR). Policy allows
+  app:/cover:/media: sources explicitly.
+- **Symlink asymmetry:** the scanner **follows** symlinks (dirs and files), but the watcher runs
+  `followSymlinks: false` — symlinked content appears at launch but changes to it never live-sync.
+- **`FOLDERIFY_DEFAULT_ROOT` is not dev-only.** It's honored whenever no saved root exists
+  (packaged builds included); it's just never persisted.
+- **"Disconnect folder" is not a full reset.** It stops the watcher, clears the in-memory model,
+  and nulls the config — `folderify-cache.json`, `thumbs/`, and localStorage survive. Full reset =
+  delete the data directory.
+- **Sidecar folder art:** when a file has no embedded picture, `metadata.ts` looks for
+  `cover|folder|front|album|albumart|albumartsmall` + `.jpg|.jpeg|.png|.webp|.gif` in the file's
+  directory (memoized per dir, reset each full build).
 - **Dropbox / cloud libraries:** online-only (non-downloaded) files can't be read until synced
   locally; those tracks will skip.
 - Shared types are imported into the renderer with `import type` so they erase at build (the
   `shared/` dir lives outside the renderer root; alias `@shared`).
+- **iCloud + local codesign:** if the working copy lives in iCloud-managed Documents, local
+  `codesign` fails ("detritus not allowed" — FinderInfo xattrs can't be stripped). Build to /tmp
+  for local signed builds (`-c.directories.output=/tmp/...`); CI has no iCloud and signs fine.
 
 ---
 
 ## Commands
 
 ```bash
-npm run dev          # electron-vite dev (HMR). FOLDERIFY_DEFAULT_ROOT=<dir> launches into a folder (dev only)
-npm run build        # type-safe production bundle into out/
-npm run typecheck    # tsc on node (main/preload) + web (renderer) projects
-npm run build:unpack # build + electron-builder --dir → release/mac-arm64/Folderify.app (unsigned)
-npm run build:mac    # build + .dmg (arm64 + x64); needs Developer ID + notarize env for distribution
+npm run dev            # electron-vite dev (HMR). FOLDERIFY_DEFAULT_ROOT=<dir> opens a folder when
+                       # no root is saved (works in packaged builds too; never persisted)
+npm run build          # type-safe production bundle into out/
+npm run preview        # electron-vite preview of the production bundle
+npm run typecheck      # typecheck:node (main/preload/shared) + typecheck:web (renderer)
+npm run build:unpack   # build + electron-builder --dir → release/mac-arm64/Folderify.app
+                       # (ad-hoc signed by the afterPack hook — NOT unsigned)
+npm run build:mac      # build + .dmg (Apple Silicon arm64 ONLY) → release/Folderify-<v>-arm64.dmg
 ```
 
-Unsigned local builds open on double-click (no quarantine). For distribution, sign + notarize
-(entitlements in `build/entitlements.mac.plist`).
+Local packaged builds are **ad-hoc signed** (see Shipping) and open normally. They are
+**un-notarized**: on a fresh machine Gatekeeper requires System Settings → Privacy & Security →
+**Open Anyway** once (macOS 15+), or right-click → Open on older macOS.
+
+---
+
+## Shipping / releases
+
+**Packaging** (`electron-builder.yml`): `publish: null` (CI uploads, not electron-builder),
+`mac.identity: null` (skips electron-builder's signing), `afterPack: build/after-pack.js` which
+`xattr -cr`s then **ad-hoc signs** (`codesign --force --deep --sign -`) — a fully-unsigned app is
+rejected by Apple Silicon Gatekeeper as "damaged"; ad-hoc needs no Developer ID. Single **arm64**
+dmg; `artifactName: ${productName}-${version}-${arch}.${ext}` → `Folderify-0.1.5-arm64.dmg`
+(**the updater's asset matcher depends on this name pattern**). `extendInfo` carries
+Music/Documents/Downloads folder usage strings.
+
+**CI** (`.github/workflows/release.yml`, macos-14 + Node 22): on tag push `v*` → npm ci → build →
+`electron-builder --mac --publish never` (`CSC_IDENTITY_AUTODISCOVERY=false`) → always upload
+dmg+blockmap as CI artifacts → **only on tags** create a **draft** GitHub release named after the
+tag with `body_path: RELEASE_NOTES.md`. Manual `workflow_dispatch` produces test artifacts without
+cutting a release.
+
+**Release checklist** (all three versions in lockstep):
+1. Bump `package.json` version, `npm install --package-lock-only`, bump iOS `MARKETING_VERSION`
+   (both configs in `ios/App/App.xcodeproj/project.pbxproj`).
+2. Rewrite `RELEASE_NOTES.md` for the new version (it becomes the release body verbatim).
+3. Commit, push main, tag `v<version>`, push the tag.
+4. Watch CI; verify the draft has a non-empty body and the arm64 dmg attached (softprops has an
+   empty-body quirk — check before publishing).
+5. Publish the draft (`gh release edit v<version> --draft=false --latest`) — only then does the
+   in-app updater see it.
+
+---
 
 ## Config / data location
 
 `~/Library/Application Support/Folderify/` (macOS is case-insensitive, so `folderify`==`Folderify`):
-- `folderify-config.json` — the saved root folder
-- `folderify-cache.json` — metadata cache (path → mtime/size/tags)
-- `thumbs/` — generated album-art thumbnails
+- `folderify-config.json` — the saved root folder (re-stat'd on load; nulled if missing)
+- `folderify-cache.json` — metadata cache (path → mtime/size/tags, versioned)
+- `thumbs/` — generated album-art thumbnails (`<id>_<sm|lg>.jpg`)
+- `Local Storage/` (Chromium) — `folderify.settings`, `folderify.volume`, `folderify.lastplayed`
 
-Reset via the in-app folder menu → **Disconnect folder**, or delete that directory.
+Updater logs: `~/Library/Logs/Folderify/update-<ts>.log` (+ `attempts.log`).
+
+Reset via the in-app folder menu → **Disconnect folder** (partial — see gotchas), or delete the
+whole directory (full).
 
 ---
 
 ## iOS app (Capacitor) — `ios/`, `src/mobile/`, `vite.mobile.config.ts`
 
 The iPhone app reuses the **same React renderer + stores** inside a WKWebView via Capacitor 8
-(SPM-based, no CocoaPods). A separate Vite build (`npm run build:mobile` → `dist-mobile/`) bundles a
-mobile shell; `npm run ios:sync` copies it into `ios/App/App/public` and `npm run ios:open` opens
-Xcode. Build/run on device from Xcode (see the iOS launch notes below).
+(SPM-based, no CocoaPods). A separate Vite build (`npm run build:mobile` → `dist-mobile/`) bundles
+the mobile shell; `npm run ios:sync` copies it into `ios/App/App/public`; build/run on device from
+Xcode. **Phase 1 (native library plugin) is complete** — folder pick, persistent access, on-device
+scanning, artwork, and seekable playback all work natively.
 
-- **`src/mobile/`** — `MobileApp.tsx` (native-feeling tab shell reusing SeekBar/TransportControls/etc),
-  `native-api.ts` (real `window.api` backed by the Swift plugin), `api-stub.ts` (browser fallback),
-  `install-api.ts` (picks native vs stub via `Capacitor.isNativePlatform()`). The shell drives the
+- **`src/mobile/`** — `MobileApp.tsx` (tab shell reusing SeekBar/TransportControls/etc),
+  `native-api.ts` (real `window.api` backed by the Swift plugin), `api-stub.ts` (fake 3-playlist
+  library for plain-browser preview), `install-api.ts` (native vs stub via
+  `Capacitor.isNativePlatform()`), `mobile.css` (safe-area + touch sizing). The shell drives the
   shared `library-store`/`player-store` unchanged.
-- **Native plugin (`ios/App/App/`)** — the only code with disk access, mirroring the desktop main process:
-  - `FolderifyLibraryPlugin.swift` — `pickFolder` (folder picker), `getLibrary` (scan), `forget`.
-  - `LibraryAccess.swift` — persists a **security-scoped bookmark** for the picked folder; keeps the
-    scope open for the session; path-safety for `media://`; the id→JPEG artwork cache for `cover://`.
-  - `LibraryScanner.swift` — recursive audio enumeration + AVFoundation metadata/artwork → the same
-    `LibraryModel` (playlists = first path segment; Loose Tracks = `__root__`).
-  - `SchemeHandlers.swift` — `media://` (seekable, HTTP **Range**/206) + `cover://` (thumbnail) URL
-    scheme handlers, so `mediaUrl()`/`coverUrl()` from `@shared/ipc` resolve exactly as on desktop.
-  - `FolderifyBridgeViewController.swift` — a `CAPBridgeViewController` subclass that registers the
-    plugin and installs the scheme handlers (wired via `Main.storyboard` Custom Class = `App` module).
+- **Native plugin (`ios/App/App/`)** — the only code with disk access, mirroring desktop main:
+  - `FolderifyLibraryPlugin.swift` — exactly three methods: `pickFolder`
+    (UIDocumentPicker for `.folder`; cancel resolves `{root:null}`), `getLibrary` (scan; resolves
+    an EMPTY model — does not reject — when no folder is connected), `forget`. `jsName`
+    = `'FolderifyLibrary'`.
+  - `LibraryAccess.swift` — security-scoped bookmark persisted in UserDefaults key
+    `folderify.rootBookmark.v1`; scope kept open for the session; stale bookmarks re-minted;
+    path-safety for `media://`; the id→JPEG artwork cache for `cover://`.
+  - `LibraryScanner.swift` — recursive enumeration (skips hidden/package dirs) + AVFoundation
+    metadata (batched `load(.duration, .commonMetadata)`, ID3/iTunes artwork fallback), parsed in
+    task groups of 8 → the same `LibraryModel` shape.
+  - `SchemeHandlers.swift` — `media://` (single-Range/206, suffix ranges, 200 full-file
+    otherwise) + `cover://` (JPEG, 1y cache) handlers. A `TaskGuard` (NSLock + stopped-set) makes
+    callbacks atomic w.r.t. `stop()` — WebKit cancels tasks aggressively on seek and calling a
+    dead `WKURLSchemeTask` crashes.
+  - `FolderifyBridgeViewController.swift` — registers the plugin (`capacitorDidLoad`) and installs
+    the scheme handlers (`webViewConfiguration(for:)`); keeps strong handler references
+    (WKWebViewConfiguration does not retain them). Wired via `Main.storyboard` Custom Class.
+
+### iOS vs desktop divergences (know these before "it works on desktop" debugging)
+
+- **Extension set is narrower**: iOS scans 13 extensions (mp3 m4a aac wav flac aiff aif aifc opus
+  ogg oga caf alac); desktop's `AUDIO_EXT` has 24. `.m4b .mp4 .wma .wv .ape .mpc .dsf .dff .mka
+  .webm` are **invisible** on iOS, not just unplayable.
+- **Unsupported flags**: iOS flags `opus/ogg/oga` (WebKit can't play them) — by extension only, no
+  container parsing. Conversely ALAC/AIFF/FLAC play fine on iOS.
+- **Metadata is shallower**: only title/artist/album/duration/artwork; year/trackNo/discNo always
+  null, genre `''`, albumArtist = artist, codec = uppercased extension. Requires **iOS 16+**
+  (older iOS → filename titles only).
+- **Track ids differ**: desktop = sha1(path) first 16 hex; iOS = full SHA-256 hex. Ids are
+  platform-local — never compare across platforms.
+- **Artwork cache is in-memory per-session** (`LibraryAccess.artworkById`), rebuilt each scan —
+  covers 404 until a scan completes. No placeholder image on iOS (desktop serves an SVG); the
+  renderer's `<img onError>` hides broken images instead. The `?s=` size param is ignored (single
+  640px JPEG).
+- **No live watcher** on iOS — refresh is pull-based (`rescan` re-runs the scan and re-emits
+  `onLoaded`). The `scanProgress` native event is subscribed in `native-api.ts` but **no Swift
+  code emits it yet** — the only progress users see is a synthetic 'walking' emit on chooseFolder.
+- Mini-player bridge, updater, and revealTrack are **no-ops/stubs** on iOS (App Store handles
+  updates; `openExternal` = `window.open`).
 
 ### iOS gotchas (learned the hard way)
 
 - **App-embedded plugins are NOT auto-discovered.** Register explicitly with
   `bridge?.registerPluginInstance(...)` in `capacitorDidLoad()`; `jsName` must equal the
   `registerPlugin('FolderifyLibrary')` string. Symptom if missed: *"plugin not implemented on ios"*.
-- **Inject scheme handlers via `webViewConfiguration(for:)`** (not `webView(with:)`) — it runs before
-  the WKWebView is built. `media`/`cover` are custom schemes; WebKit forbids reusing http/https.
-- **iOS bookmarks differ from macOS:** create/resolve with **`[]` options** — `.withSecurityScope` is
-  macOS-only and throws on iOS. The picker URL is already security-scoped.
+- **Inject scheme handlers via `webViewConfiguration(for:)`** (not `webView(with:)`) — it runs
+  before the WKWebView is built. `media`/`cover` are custom schemes; WebKit forbids http/https.
+- **iOS bookmarks differ from macOS:** create/resolve with **`[]` options** — `.withSecurityScope`
+  is macOS-only and throws on iOS. The picker URL is already security-scoped.
 - **Strip `crossorigin`** from the built module `<script>` (the `folderify-strip-crossorigin` Vite
-  plugin) — same custom-scheme/CORS rule as desktop, or the WebView shows a black screen.
-- **iOS 26 SDK requires UIScene lifecycle** (`SceneDelegate` + `UIApplicationSceneManifest`, TN3187).
-- Codec reality is broader than desktop: WebKit on iOS plays ALAC/AIFF/FLAC; only **opus/ogg** are
-  flagged `unsupported`.
+  plugin in `vite.mobile.config.ts`) — same custom-scheme/CORS rule as desktop, or the WebView
+  shows a black screen.
+- **iOS 26 SDK requires UIScene lifecycle** (`SceneDelegate` in AppDelegate.swift +
+  `UIApplicationSceneManifest`, TN3187).
+- New Swift files must be added to `project.pbxproj` by hand (classic project format, objectVersion
+  60 — no auto-synced folder groups).
+- **Never use `FileHandle.readData(ofLength:)` / `readDataToEndOfFile()` in Swift.** They are
+  Obj-C APIs that raise `NSFileHandleOperationException` on I/O errors — Swift cannot catch
+  NSExceptions, so the app hard-crashes. Use the throwing `read(upToCount:)` / `readToEnd()`
+  instead. This bit us in `MediaSchemeHandler`: an **iCloud Drive (CloudStorage) library** with
+  online-only files failed mid-read ("Stale NFS file handle") and terminated the app. Cloud-backed
+  files also parse with null duration/empty tags during scan; playback of an unreadable file now
+  returns HTTP 500 → the engine errors → the player auto-skips.
 
 ### iOS commands
 
 ```bash
 npm run build:mobile   # vite build of the mobile shell → dist-mobile/
 npm run ios:sync       # build:mobile + cap sync ios (copies web assets, updates SPM)
-npm run ios:open       # open the Xcode project
+npm run ios:open       # open the Xcode project (build/run on device from Xcode)
 ```
+
+---
 
 ## Known limitations / future work
 
+**Desktop**
+- Un-notarized (ad-hoc signed only) — fresh installs need one Gatekeeper "Open Anyway".
+  `build/entitlements.mac.plist` is currently unused; it's staged for a future Developer ID +
+  hardened-runtime build.
 - Files deleted while the app is **closed** leave orphaned cache entries + thumbnails (the live
   watcher prunes them, a build does not). Harmless; a build-time prune would tidy disk usage.
 - Single `<audio>` element — no gapless preloading of the next track.
 - Track list uses CSS `content-visibility` for virtualization (no `react-window` yet).
-- No custom app icon; unsigned/un-notarized; universal dmg needs per-arch handling.
 - Search filters the whole library; no per-folder search scope.
+- SettingsPanel footer hard-codes "Folderify v1" (the Updates row shows the real version).
+
+**iOS (Phase 2 candidates)**
+- No metadata cache — every launch re-parses everything (desktop caches by path+mtime+size).
+- Artwork is in-memory only; no persisted thumbs.
+- No native scan-progress events (subscriber exists, emitter doesn't).
+- No richer tags (year/trackNo/genre), no live folder watching.
