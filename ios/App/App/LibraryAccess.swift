@@ -5,8 +5,8 @@ import Foundation
 // survives relaunch, and keep the scope started for the app session so the scanner
 // and the media:///cover:// scheme handlers can read files under it.
 //
-// It also holds the per-session artwork cache (track id -> JPEG data) that the
-// cover:// handler serves, built during the scan.
+// Artwork is served from the persisted thumbs directory (LibraryCache) — written
+// during scans, so covers resolve immediately on relaunch.
 final class LibraryAccess {
     static let shared = LibraryAccess()
     private init() {}
@@ -16,9 +16,6 @@ final class LibraryAccess {
     /// The active root (security scope started). nil until a folder is connected.
     private(set) var rootURL: URL?
     private var accessing = false
-
-    /// track id -> embedded artwork bytes (JPEG/PNG), for the cover:// handler.
-    var artworkById: [String: Data] = [:]
 
     var rootName: String? { rootURL?.lastPathComponent }
 
@@ -45,7 +42,6 @@ final class LibraryAccess {
         stopAccessingCurrent()
         rootURL = pickedURL
         accessing = didStart
-        artworkById = [:]
         return true
     }
 
@@ -84,8 +80,11 @@ final class LibraryAccess {
     func forget() {
         stopAccessingCurrent()
         rootURL = nil
-        artworkById = [:]
         UserDefaults.standard.removeObject(forKey: bookmarkKey)
+        // Unlike desktop (where forget is deliberately partial), iOS has no way for
+        // the user to delete app data short of deleting the app — so forget IS the
+        // full reset: metadata cache + thumbs go too.
+        LibraryCache.shared.clear()
     }
 
     private func stopAccessingCurrent() {
@@ -117,7 +116,10 @@ final class LibraryAccess {
 
     // MARK: - cover:// lookup
 
+    /// Reads the persisted thumb (written during scans). Guard the id so a crafted
+    /// cover:// URL can't path-traverse out of the thumbs directory.
     func artworkData(forTrackId id: String) -> Data? {
-        return artworkById[id]
+        guard !id.isEmpty, id.allSatisfy({ $0.isHexDigit }) else { return nil }
+        return try? Data(contentsOf: LibraryCache.shared.thumbURL(forTrackId: id))
     }
 }

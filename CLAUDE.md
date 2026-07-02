@@ -376,8 +376,10 @@ whole directory (full).
 The iPhone app reuses the **same React renderer + stores** inside a WKWebView via Capacitor 8
 (SPM-based, no CocoaPods). A separate Vite build (`npm run build:mobile` → `dist-mobile/`) bundles
 the mobile shell; `npm run ios:sync` copies it into `ios/App/App/public`; build/run on device from
-Xcode. **Phase 1 (native library plugin) is complete** — folder pick, persistent access, on-device
-scanning, artwork, and seekable playback all work natively.
+Xcode. **Phase 1 (native library plugin) and Phase 2 (persistence + progress + iCloud awareness)
+are complete** — folder pick, persistent access, on-device scanning with a metadata cache,
+persisted artwork, scan-progress events, seekable playback, and dataless-iCloud handling all work
+natively.
 
 - **`src/mobile/`** — `MobileApp.tsx` (tab shell reusing SeekBar/TransportControls/etc),
   `native-api.ts` (real `window.api` backed by the Swift plugin), `api-stub.ts` (fake 3-playlist
@@ -391,10 +393,18 @@ scanning, artwork, and seekable playback all work natively.
     = `'FolderifyLibrary'`.
   - `LibraryAccess.swift` — security-scoped bookmark persisted in UserDefaults key
     `folderify.rootBookmark.v1`; scope kept open for the session; stale bookmarks re-minted;
-    path-safety for `media://`; the id→JPEG artwork cache for `cover://`.
+    path-safety for `media://`; serves `cover://` bytes from the persisted thumbs (id is
+    hex-guarded against traversal). **`forget()` is a FULL reset on iOS** (clears cache + thumbs —
+    unlike desktop, users can't reach the data dir).
+  - `LibraryCache.swift` — Phase 2 persistence: JSON metadata cache
+    (`Application Support/Folderify/library-cache-v1.json`, keyed by path, validated by
+    mtime+size, thread-safe) + `thumbs/<id>.jpg` artwork dir. Stale entries and orphaned thumbs
+    are pruned after every scan; cache hits skip AVFoundation entirely.
   - `LibraryScanner.swift` — recursive enumeration (skips hidden/package dirs) + AVFoundation
     metadata (batched `load(.duration, .commonMetadata)`, ID3/iTunes artwork fallback), parsed in
-    task groups of 8 → the same `LibraryModel` shape.
+    task groups of 8 → the same `LibraryModel` shape. Reports progress via a callback
+    (walking every 50 files / parsing every batch / done). `isMaterializedLocally()` gates
+    AVFoundation away from dataless iCloud files.
   - `SchemeHandlers.swift` — `media://` (single-Range/206, suffix ranges, 200 full-file
     otherwise) + `cover://` (JPEG, 1y cache) handlers. A `TaskGuard` (NSLock + stopped-set) makes
     callbacks atomic w.r.t. `stop()` — WebKit cancels tasks aggressively on seek and calling a
@@ -415,13 +425,17 @@ scanning, artwork, and seekable playback all work natively.
   (older iOS → filename titles only).
 - **Track ids differ**: desktop = sha1(path) first 16 hex; iOS = full SHA-256 hex. Ids are
   platform-local — never compare across platforms.
-- **Artwork cache is in-memory per-session** (`LibraryAccess.artworkById`), rebuilt each scan —
-  covers 404 until a scan completes. No placeholder image on iOS (desktop serves an SVG); the
-  renderer's `<img onError>` hides broken images instead. The `?s=` size param is ignored (single
-  640px JPEG).
-- **No live watcher** on iOS — refresh is pull-based (`rescan` re-runs the scan and re-emits
-  `onLoaded`). The `scanProgress` native event is subscribed in `native-api.ts` but **no Swift
-  code emits it yet** — the only progress users see is a synthetic 'walking' emit on chooseFolder.
+- **Artwork is persisted** to `Application Support/Folderify/thumbs/<id>.jpg` (single 640px JPEG;
+  the `?s=` size param is ignored). No placeholder image on iOS (desktop serves an SVG); the
+  renderer's `<img onError>` hides broken images instead.
+- **No live watcher** on iOS — refresh is pull-based: the Settings tab has a **Rescan library**
+  button (`rescan` re-runs the scan and re-emits `onLoaded`). The plugin streams native
+  `scanProgress` events during scans; the Library header shows "Scanning… N / M".
+- **iCloud (dataless) handling**: never-parsed online-only files are listed by filename (no
+  metadata, not cached) so the scan never blocks on the network; **playing one triggers its
+  download** (`startDownloadingUbiquitousItem` + the blocking materializing read). Files that
+  were parsed once and later evicted keep serving cached metadata + art. Rescan after downloads
+  to pick up real tags.
 - Mini-player bridge, updater, and revealTrack are **no-ops/stubs** on iOS (App Store handles
   updates; `openExternal` = `window.open`).
 
@@ -472,8 +486,11 @@ npm run ios:open       # open the Xcode project (build/run on device from Xcode)
 - Search filters the whole library; no per-folder search scope.
 - SettingsPanel footer hard-codes "Folderify v1" (the Updates row shows the real version).
 
-**iOS (Phase 2 candidates)**
-- No metadata cache — every launch re-parses everything (desktop caches by path+mtime+size).
-- Artwork is in-memory only; no persisted thumbs.
-- No native scan-progress events (subscriber exists, emitter doesn't).
+**iOS (Phase 3 candidates)**
 - No richer tags (year/trackNo/genre), no live folder watching.
+- Legacy iCloud world (`Mobile Documents`, pre-FileProvider): evicted files appear as hidden
+  `.name.ext.icloud` placeholders — the scanner skips hidden entries, so they're invisible (the
+  modern `CloudStorage` dataless model, which real devices use now, is fully handled).
+- Concurrent scans aren't serialized like desktop's rebuild queue (worst case: wasted work).
+- Downloads triggered by playing an online-only track have no progress UI; metadata appears only
+  after a manual rescan.

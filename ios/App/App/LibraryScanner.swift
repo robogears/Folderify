@@ -6,10 +6,13 @@ import UIKit
 
 // Recursively enumerates audio files under the connected root and builds the same
 // LibraryModel the desktop app produces (src/shared/models.ts): a flat track list
-// plus playlists derived from the first path segment under the root. Metadata and
-// embedded artwork come from AVFoundation. Returns the model as a JSON-ready
-// [String: Any] (for CAPPluginCall.resolve) plus an id -> JPEG artwork map that the
-// cover:// handler serves.
+// plus playlists derived from the first path segment under the root.
+//
+// Phase 2: unchanged files (path+mtime+size) are served from LibraryCache with NO
+// AVFoundation parse — relaunch scans are near-instant. Artwork is written once to
+// disk (LibraryCache.thumbsDir) and served from there by the cover:// handler.
+// Progress is reported through a callback so the plugin can stream scanProgress
+// events to the renderer.
 enum LibraryScanner {
 
     static let LOOSE_ID = "__root__"
@@ -22,23 +25,42 @@ enum LibraryScanner {
     // and playback navigation skips them (mirrors the desktop codec gate).
     static let unsupportedExts: Set<String> = ["opus", "ogg", "oga"]
 
-    /// One parsed file: the JSON-ready track dict plus its optional (id, JPEG) artwork.
-    typealias TrackResult = (track: [String: Any], art: (String, Data)?)
+    /// Mirrors ScanProgress in src/shared/models.ts.
+    typealias Progress = (_ scanned: Int, _ total: Int, _ done: Bool, _ phase: String) -> Void
+
+    /// One parsed file: the JSON-ready track dict.
+    typealias TrackResult = [String: Any]
 
     static func trackId(forPath path: String) -> String {
         let digest = SHA256.hash(data: Data(path.utf8))
         return digest.map { String(format: "%02x", $0) }.joined()
     }
 
-    static func scan(root: URL, rootName: String) async -> (model: [String: Any], artwork: [String: Data]) {
-        let rootPath = root.standardizedFileURL.path
-        let fileURLs = enumerateAudioFiles(under: root)
+    /// True when the file's bytes are on device. iCloud Drive (CloudStorage) files
+    /// can be "dataless" — real name + metadata present, content not downloaded.
+    /// Reads on dataless files block while the system materializes them (or fail),
+    /// so the scanner must not hand them to AVFoundation.
+    static func isMaterializedLocally(_ url: URL) -> Bool {
+        guard let v = try? url.resourceValues(forKeys: [.isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey]),
+              v.isUbiquitousItem == true,
+              let status = v.ubiquitousItemDownloadingStatus else { return true }
+        return status == .current || status == .downloaded
+    }
 
-        var tracks: [[String: Any]] = []
-        var artwork: [String: Data] = [:]
+    static func scan(root: URL, rootName: String, progress: Progress? = nil) async -> [String: Any] {
+        let rootPath = root.standardizedFileURL.path
+        LibraryCache.shared.beginScan()
+
+        let fileURLs = enumerateAudioFiles(under: root) { found in
+            progress?(found, 0, false, "walking")
+        }
+        progress?(0, fileURLs.count, false, "parsing")
+
+        var tracks: [TrackResult] = []
         tracks.reserveCapacity(fileURLs.count)
 
         // Bounded concurrency: parse in batches so we don't open hundreds of AVAssets at once.
+        var parsed = 0
         for batch in fileURLs.chunked(into: 8) {
             let results: [TrackResult] = await withTaskGroup(of: TrackResult?.self) { group in
                 for url in batch {
@@ -48,26 +70,28 @@ enum LibraryScanner {
                 for await r in group { if let r { arr.append(r) } }
                 return arr
             }
-            for r in results {
-                tracks.append(r.track)
-                if let (id, data) = r.art { artwork[id] = data }
-            }
+            tracks.append(contentsOf: results)
+            parsed += batch.count
+            progress?(parsed, fileURLs.count, false, "parsing")
         }
 
+        let liveIds = Set(tracks.compactMap { $0["id"] as? String })
+        LibraryCache.shared.endScan(liveTrackIds: liveIds)
+        progress?(fileURLs.count, fileURLs.count, true, "done")
+
         let playlists = buildPlaylists(from: tracks, rootPath: rootPath)
-        let model: [String: Any] = [
+        return [
             "root": rootPath,
             "rootName": rootName,
             "playlists": playlists,
             "tracks": tracks,
             "scanning": false
         ]
-        return (model, artwork)
     }
 
     // MARK: - enumeration
 
-    private static func enumerateAudioFiles(under root: URL) -> [URL] {
+    private static func enumerateAudioFiles(under root: URL, onFound: ((Int) -> Void)? = nil) -> [URL] {
         let fm = FileManager.default
         let keys: [URLResourceKey] = [.isRegularFileKey]
         var out: [URL] = []
@@ -79,6 +103,7 @@ enum LibraryScanner {
             guard audioExts.contains(url.pathExtension.lowercased()) else { continue }
             if let vals = try? url.resourceValues(forKeys: [.isRegularFileKey]), vals.isRegularFile == true {
                 out.append(url)
+                if out.count % 50 == 0 { onFound?(out.count) }
             }
         }
         return out
@@ -96,6 +121,26 @@ enum LibraryScanner {
         let size = rv?.fileSize ?? 0
 
         let (playlistId, _) = playlistInfo(path: path, rootPath: rootPath)
+
+        // Cache hit → no AVFoundation, no thumbnail work (the thumb is already on disk).
+        // Note this also covers files the system later EVICTED: their cached metadata
+        // and thumb stay valid, and playing one re-materializes it on demand.
+        if let cached = LibraryCache.shared.lookup(path: path, mtimeMs: mtimeMs, size: size) {
+            return trackDict(id: id, path: path, mtimeMs: mtimeMs, size: size, ext: ext,
+                             playlistId: playlistId, title: cached.title, artist: cached.artist,
+                             album: cached.album, durationSec: cached.durationSec, hasArt: cached.hasArt)
+        }
+
+        // Online-only iCloud file we've never parsed: AVFoundation would block on the
+        // network for each one. List it by filename instead; playing it triggers the
+        // download (media handler). Deliberately NOT cached, so a rescan after it
+        // downloads parses the real metadata.
+        if !isMaterializedLocally(url) {
+            return trackDict(id: id, path: path, mtimeMs: mtimeMs, size: size, ext: ext,
+                             playlistId: playlistId,
+                             title: url.deletingPathExtension().lastPathComponent,
+                             artist: "", album: "", durationSec: nil, hasArt: false)
+        }
 
         var title: String?
         var artist: String?
@@ -120,22 +165,38 @@ enum LibraryScanner {
             }
         }
 
-        // Downscale/normalize artwork to JPEG so cover:// always serves image/jpeg.
-        var art: (String, Data)?
-        if let artData, let jpeg = downscaledJPEG(artData) { art = (id, jpeg) }
-        let hasArt = art != nil
+        // Persist artwork as a JPEG thumb; hasArt = the write succeeded.
+        var hasArt = false
+        if let artData, let jpeg = downscaledJPEG(artData) {
+            let dest = LibraryCache.shared.thumbURL(forTrackId: id)
+            hasArt = (try? jpeg.write(to: dest, options: .atomic)) != nil
+        }
 
         let finalTitle = (title?.isEmpty == false) ? title! : url.deletingPathExtension().lastPathComponent
+        let finalArtist = artist ?? ""
+        let finalAlbum = album ?? ""
 
-        let track: [String: Any] = [
+        LibraryCache.shared.store(path: path, meta: CachedTrackMeta(
+            mtimeMs: mtimeMs, size: size, title: finalTitle, artist: finalArtist,
+            album: finalAlbum, durationSec: durationSec, hasArt: hasArt))
+
+        return trackDict(id: id, path: path, mtimeMs: mtimeMs, size: size, ext: ext,
+                         playlistId: playlistId, title: finalTitle, artist: finalArtist,
+                         album: finalAlbum, durationSec: durationSec, hasArt: hasArt)
+    }
+
+    private static func trackDict(id: String, path: String, mtimeMs: Double, size: Int, ext: String,
+                                  playlistId: String, title: String, artist: String, album: String,
+                                  durationSec: Double?, hasArt: Bool) -> TrackResult {
+        return [
             "id": id,
             "path": path,
             "mtimeMs": mtimeMs,
             "size": size,
-            "title": finalTitle,
-            "artist": artist ?? "",
-            "album": album ?? "",
-            "albumArtist": artist ?? "",
+            "title": title,
+            "artist": artist,
+            "album": album,
+            "albumArtist": artist,
             "year": NSNull(),
             "trackNo": NSNull(),
             "trackOf": NSNull(),
@@ -147,7 +208,6 @@ enum LibraryScanner {
             "unsupported": unsupportedExts.contains(ext),
             "playlistId": playlistId
         ]
-        return (track, art)
     }
 
     // MARK: - metadata helpers (async, iOS 16+)
@@ -207,8 +267,8 @@ enum LibraryScanner {
         return (seg, seg)
     }
 
-    private static func buildPlaylists(from tracks: [[String: Any]], rootPath: String) -> [[String: Any]] {
-        var byId: [String: [[String: Any]]] = [:]
+    private static func buildPlaylists(from tracks: [TrackResult], rootPath: String) -> [[String: Any]] {
+        var byId: [String: [TrackResult]] = [:]
         for t in tracks {
             let pid = (t["playlistId"] as? String) ?? LOOSE_ID
             byId[pid, default: []].append(t)

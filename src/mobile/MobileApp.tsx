@@ -15,6 +15,7 @@ import {
   NextIcon,
   MusicIcon,
   FolderPlusIcon,
+  RefreshIcon,
   AlertIcon
 } from '../renderer/src/components/Icons'
 import { formatTime, formatDurationLong, pluralize, normalizeSearch } from '../renderer/src/lib/format'
@@ -83,6 +84,9 @@ export function MobileApp(): JSX.Element {
   const playlists = useLibrary((s) => s.playlists)
   const tracksById = useLibrary((s) => s.tracksById)
   const chooseFolder = useLibrary((s) => s.chooseFolder)
+  const rescan = useLibrary((s) => s.rescan)
+  const scanning = useLibrary((s) => s.scanning)
+  const scanProgress = useLibrary((s) => s.progress)
 
   const currentTrackId = usePlayer((s) => s.currentTrackId)
   const isPlaying = usePlayer((s) => s.isPlaying)
@@ -125,7 +129,11 @@ export function MobileApp(): JSX.Element {
       <header className="m-head">
         <h1 className="m-title">Library</h1>
         <p className="m-subtitle">
-          {rootName ?? 'Folderify'} · {pluralize(tracksById.size, 'track')}
+          {scanning
+            ? scanProgress && scanProgress.phase === 'parsing' && scanProgress.total > 0
+              ? `Scanning… ${scanProgress.scanned.toLocaleString()} / ${scanProgress.total.toLocaleString()}`
+              : `Scanning… ${scanProgress ? scanProgress.scanned.toLocaleString() : ''}`
+            : `${rootName ?? 'Folderify'} · ${pluralize(tracksById.size, 'track')}`}
         </p>
       </header>
       {playlists.length > 0 ? (
@@ -240,6 +248,11 @@ export function MobileApp(): JSX.Element {
         <button className="m-btn" onClick={() => void chooseFolder()}>
           <FolderPlusIcon size={18} /> {root ? 'Change folder' : 'Connect a folder'}
         </button>
+        {root && (
+          <button className="m-btn m-btn-secondary" disabled={scanning} onClick={() => void rescan()}>
+            <RefreshIcon size={18} /> {scanning ? 'Scanning…' : 'Rescan library'}
+          </button>
+        )}
         <p className="m-note">Folderify only reads your files — it never moves or changes anything.</p>
       </div>
     </div>

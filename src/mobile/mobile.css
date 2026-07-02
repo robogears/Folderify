@@ -282,6 +282,13 @@
   font-size: 15px;
   font-weight: 600;
 }
+.m-btn-secondary {
+  background: var(--surface-2);
+  color: var(--text-primary);
+}
+.m-btn:disabled {
+  opacity: 0.55;
+}
 .m-note {
   padding: 0 8px;
   font-size: 12px;

@@ -89,6 +89,14 @@ final class MediaSchemeHandler: NSObject, WKURLSchemeHandler {
             fail(task, code: 404); return
         }
 
+        // Online-only iCloud file: kick off its download (fire-and-forget; throws for
+        // non-ubiquitous items — ignored). The read below blocks while the system
+        // materializes the file, so playback starts once enough bytes arrive; if the
+        // fetch fails (offline), the throwing read returns an error → 500 → auto-skip.
+        if !LibraryScanner.isMaterializedLocally(fileURL) {
+            try? FileManager.default.startDownloadingUbiquitousItem(at: fileURL)
+        }
+
         let path = fileURL.path
         let fm = FileManager.default
         guard let attrs = try? fm.attributesOfItem(atPath: path),

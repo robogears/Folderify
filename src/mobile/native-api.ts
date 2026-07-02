@@ -66,6 +66,7 @@ export function installNativeApi(): void {
       }
     },
     rescan: async () => {
+      emitProgress({ scanned: 0, total: 0, done: false, phase: 'walking' })
       const model = await Plugin.getLibrary()
       emitLoaded(model)
       return { ok: true }

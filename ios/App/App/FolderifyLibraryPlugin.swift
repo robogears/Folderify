@@ -80,8 +80,16 @@ public class FolderifyLibraryPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPick
                 ])
                 return
             }
-            let (model, artwork) = await LibraryScanner.scan(root: root, rootName: root.lastPathComponent)
-            LibraryAccess.shared.artworkById = artwork
+            // Stream ScanProgress to the renderer (native-api.ts subscribes to this).
+            let model = await LibraryScanner.scan(root: root, rootName: root.lastPathComponent) {
+                [weak self] scanned, total, done, phase in
+                self?.notifyListeners("scanProgress", data: [
+                    "scanned": scanned,
+                    "total": total,
+                    "done": done,
+                    "phase": phase
+                ])
+            }
             call.resolve(model)
         }
     }
