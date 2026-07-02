@@ -101,15 +101,21 @@ final class MediaSchemeHandler: NSObject, WKURLSchemeHandler {
         let mime = mimeType(forExtension: fileURL.pathExtension)
         let rangeHeader = task.request.value(forHTTPHeaderField: "Range")
 
+        // IMPORTANT: use the throwing read APIs (read(upToCount:)/readToEnd), NOT the
+        // Obj-C readData(ofLength:)/readDataToEndOfFile — those raise NSExceptions that
+        // Swift cannot catch and CRASH the app. Cloud-backed files (iCloud Drive /
+        // CloudStorage) routinely fail mid-read when online-only ("Stale NFS file handle").
         if let (start, end) = parseRange(rangeHeader, fileSize: fileSize) {
             let length = end - start + 1
             do {
                 try handle.seek(toOffset: UInt64(start))
-                let data = handle.readData(ofLength: length)
+                guard let data = try handle.read(upToCount: length) else {
+                    fail(task, code: 500); return
+                }
                 let headers = [
                     "Content-Type": mime,
                     "Content-Length": "\(data.count)",
-                    "Content-Range": "bytes \(start)-\(end)/\(fileSize)",
+                    "Content-Range": "bytes \(start)-\(start + data.count - 1)/\(fileSize)",
                     "Accept-Ranges": "bytes",
                     "Access-Control-Allow-Origin": "*"
                 ]
@@ -120,15 +126,21 @@ final class MediaSchemeHandler: NSObject, WKURLSchemeHandler {
             }
         } else {
             // No (valid) Range — return the whole file.
-            let data = handle.readDataToEndOfFile()
-            let headers = [
-                "Content-Type": mime,
-                "Content-Length": "\(data.count)",
-                "Accept-Ranges": "bytes",
-                "Access-Control-Allow-Origin": "*"
-            ]
-            let resp = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: headers)!
-            send(task, response: resp, data: data)
+            do {
+                guard let data = try handle.readToEnd(), !data.isEmpty else {
+                    fail(task, code: 500); return
+                }
+                let headers = [
+                    "Content-Type": mime,
+                    "Content-Length": "\(data.count)",
+                    "Accept-Ranges": "bytes",
+                    "Access-Control-Allow-Origin": "*"
+                ]
+                let resp = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: headers)!
+                send(task, response: resp, data: data)
+            } catch {
+                fail(task, code: 500)
+            }
         }
     }
 
