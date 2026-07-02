@@ -376,10 +376,10 @@ whole directory (full).
 The iPhone app reuses the **same React renderer + stores** inside a WKWebView via Capacitor 8
 (SPM-based, no CocoaPods). A separate Vite build (`npm run build:mobile` → `dist-mobile/`) bundles
 the mobile shell; `npm run ios:sync` copies it into `ios/App/App/public`; build/run on device from
-Xcode. **Phase 1 (native library plugin) and Phase 2 (persistence + progress + iCloud awareness)
-are complete** — folder pick, persistent access, on-device scanning with a metadata cache,
-persisted artwork, scan-progress events, seekable playback, and dataless-iCloud handling all work
-natively.
+Xcode. **Phases 1–3 are complete** — Phase 1 (native library plugin: folder pick, persistent
+access, on-device scan, artwork, seekable playback), Phase 2 (metadata cache, persisted artwork,
+scan progress, iCloud-dataless awareness), and Phase 3 (background audio + native lock-screen /
+Control Center / AirPods Now Playing) all work natively.
 
 - **`src/mobile/`** — `MobileApp.tsx` (tab shell reusing SeekBar/TransportControls/etc),
   `native-api.ts` (real `window.api` backed by the Swift plugin), `api-stub.ts` (fake 3-playlist
@@ -409,7 +409,16 @@ natively.
     otherwise) + `cover://` (JPEG, 1y cache) handlers. A `TaskGuard` (NSLock + stopped-set) makes
     callbacks atomic w.r.t. `stop()` — WebKit cancels tasks aggressively on seek and calling a
     dead `WKURLSchemeTask` crashes.
-  - `FolderifyBridgeViewController.swift` — registers the plugin (`capacitorDidLoad`) and installs
+  - `FolderifyNowPlayingPlugin.swift` (Phase 3) — native lock-screen bridge (`jsName`
+    `'FolderifyNowPlaying'`). `update(...)`/`clear()` set `MPNowPlayingInfoCenter` (artwork from the
+    persisted thumb) **event-driven only** (iOS extrapolates the scrubber from elapsed+rate;
+    continuous background writes get dropped). `MPRemoteCommandCenter` handlers (play/pause/toggle/
+    next/prev/seek) fire even when backgrounded and forward to JS via
+    `notifyListeners('remoteCommand')` → `src/mobile/now-playing.ts` → player store. WebKit still
+    does the actual `<audio>` playback; this bridge is used **instead of** the Web MediaSession hook
+    on iOS (using both double-handles every command). Background audio needs
+    `UIBackgroundModes=audio` (Info.plist) + `AVAudioSession .playback` (set in AppDelegate).
+  - `FolderifyBridgeViewController.swift` — registers BOTH plugins (`capacitorDidLoad`) and installs
     the scheme handlers (`webViewConfiguration(for:)`); keeps strong handler references
     (WKWebViewConfiguration does not retain them). Wired via `Main.storyboard` Custom Class.
 
@@ -486,7 +495,15 @@ npm run ios:open       # open the Xcode project (build/run on device from Xcode)
 - Search filters the whole library; no per-folder search scope.
 - SettingsPanel footer hard-codes "Folderify v1" (the Updates row shows the real version).
 
-**iOS (Phase 3 candidates)**
+**iOS (Phase 4 candidates)**
+- **Background-audio reliability is WebKit's, not ours.** Audio playback lives in the WKWebView
+  `<audio>` element; WebKit keeps it going in the background via a process assertion (iOS 14+) but
+  this is historically flaky in Capacitor apps (audio can stop ~15s after backgrounding). The
+  native Now Playing bridge keeps the lock-screen UI/commands alive, but a lock-screen play/pause
+  round-trips to JS (`notifyListeners` → player store → `<audio>`), which only runs reliably while
+  the app isn't fully suspended. The bulletproof fix is **native AVPlayer playback** (drop the
+  `<audio>` element on iOS behind a pluggable engine backend) so play/pause/seek act directly on a
+  native player — the biggest remaining iOS rework, deferred until device testing shows it's needed.
 - No richer tags (year/trackNo/genre), no live folder watching.
 - Legacy iCloud world (`Mobile Documents`, pre-FileProvider): evicted files appear as hidden
   `.name.ext.icloud` placeholders — the scanner skips hidden entries, so they're invisible (the
