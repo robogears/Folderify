@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { LibraryModel, Track, Playlist, FsDelta, ScanProgress } from '@shared/models'
+import { useNotice } from './notice-store'
 
 /** Special selection ids (null = Home grid). */
 export const ALL_SONGS_ID = '__all__'
@@ -46,7 +47,14 @@ export const useLibrary = create<LibraryState>((set, get) => ({
     // Attach listeners BEFORE the first fetch so we can't miss a push.
     window.api.onLoaded((m) => get().applyModel(m))
     window.api.onChanged((d) => get().applyDelta(d))
-    window.api.onScanProgress((p) => set({ progress: p, scanning: !p.done }))
+    window.api.onScanProgress((p) => {
+      if (p.phase === 'error') {
+        useNotice.getState().show("Couldn't finish scanning your folder. Try Rescan.")
+        set({ scanning: false, progress: null })
+        return
+      }
+      set({ progress: p, scanning: !p.done })
+    })
     void window.api.getLibrary().then((m) => get().applyModel(m))
   },
 
@@ -89,16 +97,31 @@ export const useLibrary = create<LibraryState>((set, get) => ({
   setSearch: (q) => set({ search: q }),
 
   chooseFolder: async () => {
-    const res = await window.api.chooseFolder()
-    if (res.root) set({ scanning: true, selection: null, search: '' })
+    try {
+      const res = await window.api.chooseFolder()
+      if (res.root) set({ scanning: true, selection: null, search: '' })
+    } catch {
+      set({ scanning: false })
+      useNotice.getState().show("Couldn't open that folder.")
+    }
   },
 
   rescan: async () => {
-    await window.api.rescan()
+    try {
+      set({ scanning: true })
+      await window.api.rescan()
+    } catch {
+      set({ scanning: false })
+      useNotice.getState().show("Couldn't rescan your folder.")
+    }
   },
 
   forget: async () => {
-    await window.api.forget()
+    try {
+      await window.api.forget()
+    } catch {
+      /* clearing local state below is the meaningful part; ignore IPC failure */
+    }
     set({
       root: null,
       rootName: null,

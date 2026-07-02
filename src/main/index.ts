@@ -1,5 +1,6 @@
 import { app, BrowserWindow, session, Tray, Menu, nativeImage, screen, ipcMain } from 'electron'
 import { join } from 'node:path'
+import { stat } from 'node:fs/promises'
 import { TRAY_ICON_1X, TRAY_ICON_2X } from './tray-icon'
 import { registerSchemes, registerProtocolHandlers } from './protocols'
 import { registerIpc } from './ipc'
@@ -27,6 +28,10 @@ let queuedRoot: string | null = null
 function send<C extends string, T>(channel: C, payload: T): void {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload)
 }
+
+// Route macOS hardware media keys (F7/F8/F9) to the renderer's MediaSession action
+// handlers instead of letting the system swallow them. Must be set before app ready.
+app.commandLine.appendSwitch('enable-features', 'HardwareMediaKeyHandling,MediaSessionService')
 
 // Custom schemes must be registered before the app is ready.
 registerSchemes()
@@ -158,6 +163,7 @@ async function runRebuild(root: string): Promise<void> {
     send('library:loaded', library.toModel())
   } catch (err) {
     console.error('[folderify] rebuild failed:', err)
+    send('library:scan-progress', { scanned: 0, total: 0, done: true, phase: 'error' })
     send('library:loaded', library.toModel())
   } finally {
     scanning = false
@@ -238,10 +244,19 @@ app.whenReady().then(async () => {
   setTimeout(() => void runUpdateCheck(), 2500)
 
   // Restore the previously chosen library in the background.
-  // FOLDERIFY_DEFAULT_ROOT is a dev convenience for launching into a known folder
-  // (not persisted — the real source of truth is the saved config).
-  const savedRoot = (await loadRoot()) ?? process.env.FOLDERIFY_DEFAULT_ROOT ?? null
-  if (savedRoot) startRebuild(savedRoot)
+  // FOLDERIFY_DEFAULT_ROOT is honored whenever no saved root exists (not persisted —
+  // the saved config is the real source of truth). loadRoot() already re-stats the
+  // saved config; validate the env fallback the same way so a bad path is ignored.
+  let startRoot = await loadRoot()
+  if (!startRoot && process.env.FOLDERIFY_DEFAULT_ROOT) {
+    const envRoot = process.env.FOLDERIFY_DEFAULT_ROOT
+    const isDir = await stat(envRoot)
+      .then((s) => s.isDirectory())
+      .catch(() => false)
+    if (isDir) startRoot = envRoot
+    else console.warn('[folderify] FOLDERIFY_DEFAULT_ROOT is not a directory, ignoring:', envRoot)
+  }
+  if (startRoot) startRebuild(startRoot)
 
   app.on('activate', () => showMain())
 }).catch((err) => console.error('[folderify] startup failed:', err))

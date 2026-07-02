@@ -163,13 +163,18 @@ export function registerProtocolHandlers({ getRoot, rendererDist }: HandlerDeps)
     const id = decodeURIComponent(url.pathname).replace(/^\/+/, '')
     const size: ThumbSize = url.searchParams.get('s') === 'lg' ? 'lg' : 'sm'
     if (id && id !== 'placeholder') {
-      try {
-        const buf = await fs.readFile(thumbPath(id, size))
-        return new Response(buf, {
-          headers: { 'content-type': 'image/jpeg', 'cache-control': 'max-age=31536000, immutable' }
-        })
-      } catch {
-        // No thumbnail on disk — fall through to placeholder.
+      // Prefer the requested size; if a large thumb is missing (e.g. only the small
+      // one was written), fall back to it before the placeholder so real art still shows.
+      const candidates: ThumbSize[] = size === 'lg' ? ['lg', 'sm'] : ['sm']
+      for (const s of candidates) {
+        try {
+          const buf = await fs.readFile(thumbPath(id, s))
+          return new Response(buf, {
+            headers: { 'content-type': 'image/jpeg', 'cache-control': 'max-age=31536000, immutable' }
+          })
+        } catch {
+          // try the next candidate, then the placeholder
+        }
       }
     }
     return placeholderResponse()

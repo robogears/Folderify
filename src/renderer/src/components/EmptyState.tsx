@@ -1,6 +1,7 @@
 import type { JSX } from 'react'
 import { useLibrary } from '../state/library-store'
 import { FolderPlusIcon } from './Icons'
+import { Toast } from './Toast'
 
 export function EmptyState(): JSX.Element {
   const chooseFolder = useLibrary((s) => s.chooseFolder)
@@ -21,6 +22,7 @@ export function EmptyState(): JSX.Element {
         </button>
         <p className="empty-hint">Folderify only reads your files. It never moves, copies, or changes anything.</p>
       </div>
+      <Toast />
     </div>
   )
 }

@@ -1052,6 +1052,35 @@
 }
 
 /* ============================================================= Scan chip */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 104px;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  max-width: min(440px, calc(100vw - 48px));
+  padding: 11px 16px;
+  background: var(--surface-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  box-shadow: 0 14px 34px -10px rgba(0, 0, 0, 0.65);
+  color: var(--text-primary);
+  font-size: var(--fs-meta);
+  line-height: 1.35;
+  text-align: left;
+  animation: fade-up var(--t-base) var(--ease-out);
+}
+.toast > svg {
+  flex: 0 0 auto;
+  color: var(--danger);
+}
+.toast-text {
+  min-width: 0;
+}
+
 .scan-chip {
   position: absolute;
   right: var(--sp-5);

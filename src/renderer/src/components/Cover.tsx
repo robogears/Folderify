@@ -24,9 +24,14 @@ export function Cover({ trackId, hasArt = true, size = 'sm', className }: CoverP
       alt=""
       // On desktop the cover:// handler always resolves (placeholder fallback).
       // On iOS before the scheme handler exists, hide the broken-image glyph so
-      // missing art shows as a clean dark tile instead.
+      // missing art shows as a clean dark tile instead. Reveal again on a
+      // successful load so art that arrives later (e.g. after an iOS scan finishes,
+      // reusing this same <img>) isn't stuck hidden.
       onError={(e) => {
         e.currentTarget.style.visibility = 'hidden'
+      }}
+      onLoad={(e) => {
+        e.currentTarget.style.visibility = ''
       }}
     />
   )

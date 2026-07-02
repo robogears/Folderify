@@ -72,7 +72,7 @@ export interface ScanProgress {
   scanned: number
   total: number
   done: boolean
-  phase: 'walking' | 'parsing' | 'done'
+  phase: 'walking' | 'parsing' | 'done' | 'error'
 }
 
 /** A compact snapshot of player state for the menu-bar mini player. */

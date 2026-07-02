@@ -11,8 +11,10 @@ import { NowPlayingBar } from './components/NowPlayingBar'
 import { FolderHero } from './components/FolderHero'
 import { TrackList } from './components/TrackList'
 import { AlbumGrid } from './components/AlbumGrid'
+import { Toast } from './components/Toast'
 import { Logo } from './components/Icons'
 import { useTrayBridge } from './tray-bridge'
+import { useMediaSession } from './media-session'
 import { normalizeSearch, formatDurationLong, pluralize } from './lib/format'
 import { LOOSE_PLAYLIST_ID, type Track } from '@shared/models'
 
@@ -196,6 +198,7 @@ export function App(): JSX.Element {
   }, [init, initUpdates])
 
   useTrayBridge()
+  useMediaSession()
 
   // Resume the last-played track once the library is loaded (paused, cued up).
   const restoredRef = useRef(false)
@@ -230,6 +233,7 @@ export function App(): JSX.Element {
       </main>
       <NowPlayingBar />
       <SettingsPanel />
+      <Toast />
     </div>
   )
 }

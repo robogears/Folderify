@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { engine } from '../audio/engine'
 import { useLibrary } from './library-store'
+import { useNotice } from './notice-store'
 import { mediaUrl } from '@shared/ipc'
 import type { Track } from '@shared/models'
 
@@ -53,9 +54,17 @@ function shuffled(ids: string[], firstId: string): string[] {
 
 const VOL_KEY = 'folderify.volume'
 const LAST_KEY = 'folderify.lastplayed'
+const SHUFFLE_KEY = 'folderify.shuffle'
+const REPEAT_KEY = 'folderify.repeat'
 const initialVolume = ((): number => {
   const v = Number(localStorage.getItem(VOL_KEY))
   return Number.isFinite(v) && v >= 0 && v <= 1 ? v : 0.8
+})()
+// Shuffle + repeat persist across launches (userData localStorage, like volume).
+const initialShuffle = localStorage.getItem(SHUFFLE_KEY) === '1'
+const initialRepeat = ((): RepeatMode => {
+  const r = localStorage.getItem(REPEAT_KEY)
+  return r === 'all' || r === 'one' ? r : 'off'
 })()
 
 function saveLast(trackId: string | null, time: number): void {
@@ -121,8 +130,8 @@ export const usePlayer = create<PlayerState>((set, get) => {
     duration: 0,
     volume: initialVolume,
     muted: false,
-    shuffle: false,
-    repeat: 'off',
+    shuffle: initialShuffle,
+    repeat: initialRepeat,
     contextLabel: null,
 
     playContext: (trackIds, startId, label) => {
@@ -133,8 +142,18 @@ export const usePlayer = create<PlayerState>((set, get) => {
       let index = queue.indexOf(startId)
       if (index < 0) index = 0
       if (!isPlayable(queue[index])) {
+        // Prefer the next playable track after the tapped one; otherwise the first
+        // playable anywhere in the context.
         const fwd = findPlayable(index, 1, false)
-        if (fwd >= 0) index = fwd
+        index = fwd >= 0 ? fwd : queue.findIndex(isPlayable)
+      }
+      if (index < 0 || !isPlayable(queue[index])) {
+        // Every track here is an unsupported codec — don't flutter through them
+        // silently; tell the user why nothing played.
+        useNotice
+          .getState()
+          .show(`Nothing in ${label ? `“${label}”` : 'this folder'} can be played on this device.`)
+        return
       }
       loadAndPlay(index)
     },
@@ -216,6 +235,11 @@ export const usePlayer = create<PlayerState>((set, get) => {
     toggleShuffle: () => {
       const { shuffle, originalQueue, currentTrackId, index } = get()
       const nextShuffle = !shuffle
+      try {
+        localStorage.setItem(SHUFFLE_KEY, nextShuffle ? '1' : '0')
+      } catch {
+        /* ignore */
+      }
       if (originalQueue.length === 0) {
         set({ shuffle: nextShuffle })
         return
@@ -229,7 +253,13 @@ export const usePlayer = create<PlayerState>((set, get) => {
 
     cycleRepeat: () => {
       const order: RepeatMode[] = ['off', 'all', 'one']
-      set({ repeat: order[(order.indexOf(get().repeat) + 1) % order.length] })
+      const next = order[(order.indexOf(get().repeat) + 1) % order.length]
+      try {
+        localStorage.setItem(REPEAT_KEY, next)
+      } catch {
+        /* ignore */
+      }
+      set({ repeat: next })
     },
 
     _onEnded: () => {
