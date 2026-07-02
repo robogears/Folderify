@@ -43,7 +43,6 @@ jobs:
           name: Folderify-macos-dmg
           path: |
             release/*.dmg
-            release/*.dmg.blockmap
           if-no-files-found: error
 
       # Only draft a GitHub Release on a version tag — not on manual/branch runs.
@@ -56,4 +55,3 @@ jobs:
           body_path: RELEASE_NOTES.md
           files: |
             release/*.dmg
-            release/*.dmg.blockmap
