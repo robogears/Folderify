@@ -19,6 +19,7 @@ import {
   AlertIcon
 } from '../renderer/src/components/Icons'
 import { formatTime, formatDurationLong, pluralize, normalizeSearch } from '../renderer/src/lib/format'
+import { useMediaSession } from '../renderer/src/media-session'
 import type { Track, Playlist } from '@shared/models'
 
 type Tab = 'library' | 'search' | 'settings'
@@ -104,6 +105,11 @@ export function MobileApp(): JSX.Element {
   useEffect(() => {
     init()
   }, [init])
+
+  // Drive the iOS lock screen / Control Center / AirPods (Web MediaSession →
+  // WebKit Now Playing). Works while the app is foregrounded; background/locked
+  // control is a WebKit limitation that a native bridge would address later.
+  useMediaSession()
 
   const currentTrack = currentTrackId ? tracksById.get(currentTrackId) : undefined
   const openPlaylist = openId ? playlists.find((p) => p.id === openId) : undefined

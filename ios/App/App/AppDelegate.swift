@@ -1,5 +1,6 @@
 import UIKit
 import Capacitor
+import AVFoundation
 
 @UIApplicationMain
 class AppDelegate: UIResponder, UIApplicationDelegate {
@@ -7,7 +8,13 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     var window: UIWindow?
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
-        // Override point for customization after application launch.
+        // Make this a background-capable playback app: the .playback category lets the
+        // WKWebView <audio> element keep playing when the screen locks / the app
+        // backgrounds (paired with UIBackgroundModes=audio) and surfaces the media on
+        // the lock screen / Control Center. We only SET the category here — we do NOT
+        // activate the session, so launching Folderify doesn't interrupt whatever the
+        // user is already playing; WebKit activates it when the user actually presses play.
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
         return true
     }
 
