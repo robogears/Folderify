@@ -307,10 +307,6 @@ export function MobileApp(): JSX.Element {
       )}
 
       <nav className="m-tabbar">
-        <button className={`m-tab ${tab === 'library' ? 'is-active' : ''}`} onClick={() => setTab('library')}>
-          <HomeIcon size={22} />
-          <span>Library</span>
-        </button>
         <button className={`m-tab ${tab === 'search' ? 'is-active' : ''}`} onClick={() => setTab('search')}>
           <SearchIcon size={22} />
           <span>Search</span>
@@ -318,6 +314,10 @@ export function MobileApp(): JSX.Element {
         <button className={`m-tab ${tab === 'settings' ? 'is-active' : ''}`} onClick={() => setTab('settings')}>
           <GearIcon size={22} />
           <span>Settings</span>
+        </button>
+        <button className={`m-tab ${tab === 'library' ? 'is-active' : ''}`} onClick={() => setTab('library')}>
+          <HomeIcon size={22} />
+          <span>Library</span>
         </button>
       </nav>
 
