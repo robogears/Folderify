@@ -19,7 +19,7 @@ import {
   AlertIcon
 } from '../renderer/src/components/Icons'
 import { formatTime, formatDurationLong, pluralize, normalizeSearch } from '../renderer/src/lib/format'
-import { useMediaSession } from '../renderer/src/media-session'
+import { useNativeNowPlaying } from './now-playing'
 import type { Track, Playlist } from '@shared/models'
 
 type Tab = 'library' | 'search' | 'settings'
@@ -106,10 +106,11 @@ export function MobileApp(): JSX.Element {
     init()
   }, [init])
 
-  // Drive the iOS lock screen / Control Center / AirPods (Web MediaSession →
-  // WebKit Now Playing). Works while the app is foregrounded; background/locked
-  // control is a WebKit limitation that a native bridge would address later.
-  useMediaSession()
+  // Drive the iOS lock screen / Control Center / AirPods natively
+  // (MPNowPlayingInfoCenter + MPRemoteCommandCenter), which survives the app being
+  // backgrounded/locked — unlike the Web MediaSession path, which WebKit resigns on
+  // suspend. WebKit still does the actual <audio> playback.
+  useNativeNowPlaying()
 
   const currentTrack = currentTrackId ? tracksById.get(currentTrackId) : undefined
   const openPlaylist = openId ? playlists.find((p) => p.id === openId) : undefined

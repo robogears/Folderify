@@ -18,6 +18,7 @@ class FolderifyBridgeViewController: CAPBridgeViewController {
 
     override open func capacitorDidLoad() {
         bridge?.registerPluginInstance(FolderifyLibraryPlugin())
+        bridge?.registerPluginInstance(FolderifyNowPlayingPlugin())
     }
 
     override open func webViewConfiguration(for instanceConfiguration: InstanceConfiguration) -> WKWebViewConfiguration {

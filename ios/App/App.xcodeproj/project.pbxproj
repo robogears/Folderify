@@ -21,6 +21,7 @@
 		FDE100000000000000000008 /* LibraryScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = FDE100000000000000000007 /* LibraryScanner.swift */; };
 		FDE10000000000000000000A /* SchemeHandlers.swift in Sources */ = {isa = PBXBuildFile; fileRef = FDE100000000000000000009 /* SchemeHandlers.swift */; };
 		FDE10000000000000000000C /* LibraryCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = FDE10000000000000000000B /* LibraryCache.swift */; };
+		FDE10000000000000000000E /* FolderifyNowPlayingPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = FDE10000000000000000000D /* FolderifyNowPlayingPlugin.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -40,6 +41,7 @@
 		FDE100000000000000000007 /* LibraryScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryScanner.swift; sourceTree = "<group>"; };
 		FDE100000000000000000009 /* SchemeHandlers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SchemeHandlers.swift; sourceTree = "<group>"; };
 		FDE10000000000000000000B /* LibraryCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryCache.swift; sourceTree = "<group>"; };
+		FDE10000000000000000000D /* FolderifyNowPlayingPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderifyNowPlayingPlugin.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -78,6 +80,7 @@
 				504EC3071FED79650016851F /* AppDelegate.swift */,
 				FDE100000000000000000001 /* FolderifyBridgeViewController.swift */,
 				FDE100000000000000000003 /* FolderifyLibraryPlugin.swift */,
+				FDE10000000000000000000D /* FolderifyNowPlayingPlugin.swift */,
 				FDE100000000000000000005 /* LibraryAccess.swift */,
 				FDE10000000000000000000B /* LibraryCache.swift */,
 				FDE100000000000000000007 /* LibraryScanner.swift */,
@@ -179,6 +182,7 @@
 				FDE100000000000000000004 /* FolderifyLibraryPlugin.swift in Sources */,
 				FDE100000000000000000006 /* LibraryAccess.swift in Sources */,
 				FDE10000000000000000000C /* LibraryCache.swift in Sources */,
+				FDE10000000000000000000E /* FolderifyNowPlayingPlugin.swift in Sources */,
 				FDE100000000000000000008 /* LibraryScanner.swift in Sources */,
 				FDE10000000000000000000A /* SchemeHandlers.swift in Sources */,
 			);
