@@ -19,7 +19,7 @@ import {
   AlertIcon
 } from '../renderer/src/components/Icons'
 import { formatTime, formatDurationLong, pluralize, normalizeSearch } from '../renderer/src/lib/format'
-import { useNativeNowPlaying } from './now-playing'
+import { useMediaSession } from '../renderer/src/media-session'
 import type { Track, Playlist } from '@shared/models'
 
 type Tab = 'library' | 'search' | 'settings'
@@ -106,11 +106,11 @@ export function MobileApp(): JSX.Element {
     init()
   }, [init])
 
-  // Drive the iOS lock screen / Control Center / AirPods natively
-  // (MPNowPlayingInfoCenter + MPRemoteCommandCenter), which survives the app being
-  // backgrounded/locked — unlike the Web MediaSession path, which WebKit resigns on
-  // suspend. WebKit still does the actual <audio> playback.
-  useNativeNowPlaying()
+  // Drive the iOS lock screen / Control Center / AirPods via the Web MediaSession
+  // API. WebKit owns the Now Playing session while the <audio> element plays, so
+  // this is what actually customizes what shows there — real title/artist/album,
+  // album art, a scrubber, and ⏮/⏭ track controls (see media-session.ts).
+  useMediaSession()
 
   const currentTrack = currentTrackId ? tracksById.get(currentTrackId) : undefined
   const openPlaylist = openId ? playlists.find((p) => p.id === openId) : undefined

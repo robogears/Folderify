@@ -14,16 +14,10 @@ import { coverUrl } from '@shared/ipc'
 // that's the most reliable form for the OS widget and satisfies the strict CSP
 // (img-src includes data:), avoiding custom-scheme/blob edge cases.
 
-const ACTIONS: MediaSessionAction[] = [
-  'play',
-  'pause',
-  'stop',
-  'previoustrack',
-  'nexttrack',
-  'seekbackward',
-  'seekforward',
-  'seekto'
-]
+// Intentionally NOT registering seekbackward/seekforward: when those are set, iOS
+// renders the ±10s skip buttons instead of the ⏮/⏭ track buttons we want for a
+// playlist player. The scrubber (seekto) still handles fine seeking.
+const ACTIONS: MediaSessionAction[] = ['play', 'pause', 'stop', 'previoustrack', 'nexttrack', 'seekto']
 
 /** Call once from a top-level component that lives for the app's lifetime. */
 export function useMediaSession(): void {
@@ -51,14 +45,6 @@ export function useMediaSession(): void {
     })
     setAction('previoustrack', () => player.getState().prev())
     setAction('nexttrack', () => player.getState().next(false))
-    setAction('seekbackward', (d) => {
-      const s = player.getState()
-      s.seek(Math.max(0, s.currentTime - (d.seekOffset ?? 10)))
-    })
-    setAction('seekforward', (d) => {
-      const s = player.getState()
-      s.seek(Math.min(s.duration || Infinity, s.currentTime + (d.seekOffset ?? 10)))
-    })
     setAction('seekto', (d) => {
       if (typeof d.seekTime === 'number') player.getState().seek(d.seekTime)
     })

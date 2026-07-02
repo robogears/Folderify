@@ -18,7 +18,12 @@ class FolderifyBridgeViewController: CAPBridgeViewController {
 
     override open func capacitorDidLoad() {
         bridge?.registerPluginInstance(FolderifyLibraryPlugin())
-        bridge?.registerPluginInstance(FolderifyNowPlayingPlugin())
+        // NOTE: FolderifyNowPlayingPlugin (native MPNowPlayingInfoCenter/
+        // MPRemoteCommandCenter) is intentionally NOT registered. While WebKit plays
+        // the <audio> element it owns the system Now Playing session and clobbers any
+        // native writes, so we customize *its* session via the Web MediaSession API
+        // (src/renderer/src/media-session.ts) instead. The native plugin is parked for
+        // the future native-AVPlayer path (Phase 4), where WebKit isn't the player.
     }
 
     override open func webViewConfiguration(for instanceConfiguration: InstanceConfiguration) -> WKWebViewConfiguration {
