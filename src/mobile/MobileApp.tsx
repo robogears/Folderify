@@ -134,6 +134,7 @@ function PlaylistScreen({ pl, onBack }: { pl: Playlist; onBack: () => void }): J
   const tracksById = useLibrary((s) => s.tracksById)
   const currentTrackId = usePlayer((s) => s.currentTrackId)
   const isPlaying = usePlayer((s) => s.isPlaying)
+  const shuffle = usePlayer((s) => s.shuffle)
   const playContext = usePlayer((s) => s.playContext)
   const togglePlay = usePlayer((s) => s.togglePlay)
 
@@ -164,7 +165,12 @@ function PlaylistScreen({ pl, onBack }: { pl: Playlist; onBack: () => void }): J
           className="m-play-btn"
           onClick={() => {
             if (playingHere) togglePlay()
-            else if (ids.length) playContext(ids, ids[0], pl.name)
+            else if (ids.length) {
+              // Respect the shuffle toggle: shuffle on -> start from a random track
+              // (playContext then shuffles the rest); off -> play in order from #1.
+              const startId = shuffle ? ids[Math.floor(Math.random() * ids.length)] : ids[0]
+              playContext(ids, startId, pl.name)
+            }
           }}
         >
           {playingHere && isPlaying ? <PauseIcon size={20} /> : <PlayIcon size={20} />}
@@ -346,18 +352,18 @@ function NowPlayingSheet({ onClose }: { onClose: () => void }): JSX.Element | nu
 }
 
 // ---- Bottom tab bar (Library pinned bottom-right) ----
-function TabBar({ tab, setTab }: { tab: Tab; setTab: (t: Tab) => void }): JSX.Element {
+function TabBar({ tab, onSelect }: { tab: Tab; onSelect: (t: Tab) => void }): JSX.Element {
   return (
     <nav className="m-tabbar">
-      <button className={`m-tab ${tab === 'search' ? 'is-active' : ''}`} onClick={() => setTab('search')}>
+      <button className={`m-tab ${tab === 'search' ? 'is-active' : ''}`} onClick={() => onSelect('search')}>
         <SearchIcon size={22} />
         <span>Search</span>
       </button>
-      <button className={`m-tab ${tab === 'settings' ? 'is-active' : ''}`} onClick={() => setTab('settings')}>
+      <button className={`m-tab ${tab === 'settings' ? 'is-active' : ''}`} onClick={() => onSelect('settings')}>
         <GearIcon size={22} />
         <span>Settings</span>
       </button>
-      <button className={`m-tab ${tab === 'library' ? 'is-active' : ''}`} onClick={() => setTab('library')}>
+      <button className={`m-tab ${tab === 'library' ? 'is-active' : ''}`} onClick={() => onSelect('library')}>
         <HomeIcon size={22} />
         <span>Library</span>
       </button>
@@ -389,6 +395,13 @@ export function MobileApp(): JSX.Element {
 
   const openPlaylist = openId ? playlists.find((p) => p.id === openId) : undefined
 
+  // Tapping the Library tab always lands on the library grid — if a playlist is
+  // open, it backs out to the root instead of doing nothing.
+  const selectTab = (t: Tab): void => {
+    if (t === 'library') setOpenId(null)
+    setTab(t)
+  }
+
   return (
     <div className="m-app">
       <main className="m-content">
@@ -404,7 +417,7 @@ export function MobileApp(): JSX.Element {
 
       {!sheet && <MiniBar onExpand={() => setSheet(true)} />}
 
-      <TabBar tab={tab} setTab={setTab} />
+      <TabBar tab={tab} onSelect={selectTab} />
 
       {sheet && <NowPlayingSheet onClose={() => setSheet(false)} />}
     </div>
