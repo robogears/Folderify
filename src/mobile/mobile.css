@@ -146,6 +146,10 @@
   padding: 8px 6px;
   border-radius: 10px;
   text-align: left;
+  /* Skip layout/paint of off-screen rows so huge playlists (100s of tracks)
+     don't lay out all at once. Keeps scrolling smooth on device. */
+  content-visibility: auto;
+  contain-intrinsic-size: 0 58px;
 }
 .m-track:active {
   background: var(--surface-hover);
