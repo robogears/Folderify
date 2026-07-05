@@ -74,6 +74,7 @@ export function SettingsPanel(): JSX.Element | null {
   const appVersion = useUpdates((s) => s.appVersion)
   const available = useUpdates((s) => s.available)
   const checkState = useUpdates((s) => s.checkState)
+  const retryAfterSeconds = useUpdates((s) => s.retryAfterSeconds)
   const check = useUpdates((s) => s.check)
 
   useEffect(() => {
@@ -152,15 +153,21 @@ export function SettingsPanel(): JSX.Element | null {
               <button
                 className="btn-ghost"
                 onClick={() => void check()}
-                disabled={checkState === 'checking'}
+                disabled={checkState === 'checking' || checkState === 'rate-limited'}
               >
                 {checkState === 'checking'
                   ? 'Checking…'
                   : checkState === 'up-to-date'
                     ? 'Up to date ✓'
-                    : checkState === 'error'
-                      ? 'Check failed — retry'
-                      : 'Check for updates'}
+                    : checkState === 'no-releases'
+                      ? 'No releases yet'
+                      : checkState === 'offline'
+                        ? 'You’re offline'
+                        : checkState === 'rate-limited'
+                          ? `Rate limited — retry in ${retryAfterSeconds}s`
+                          : checkState === 'error'
+                            ? 'Check failed — retry'
+                            : 'Check for updates'}
               </button>
             )}
           </section>

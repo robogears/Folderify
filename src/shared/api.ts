@@ -66,9 +66,12 @@ export interface FolderifyApi {
   // --- Updates ---
   getAppVersion(): Promise<string>
   checkForUpdates(): Promise<UpdateCheck>
+  /** Replay the last "available" result main discovered (launch-race safe). */
+  getPendingUpdate(): Promise<UpdateCheck | null>
   canSelfInstall(): Promise<boolean>
-  downloadUpdate(url: string): Promise<{ ok: boolean; error?: string }>
-  applyUpdate(): Promise<void>
+  /** NO url — main downloads its own last-checked asset + sidecar pair. */
+  downloadUpdate(): Promise<{ ok: boolean; error?: string }>
+  applyUpdate(): Promise<{ ok: boolean; code?: 'stage-missing' | 'busy'; error?: string }>
   openExternal(url: string): Promise<void>
   onUpdateAvailable(cb: (u: UpdateAvailable) => void): Unsubscribe
   onUpdateProgress(cb: (p: UpdateProgress) => void): Unsubscribe

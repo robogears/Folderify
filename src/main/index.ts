@@ -23,6 +23,7 @@ let mainWindow: BrowserWindow | null = null
 let miniWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let teardownListen: () => void = () => {}
+let stopUpdater: () => void = () => {}
 
 let scanning = false
 let queuedRoot: string | null = null
@@ -228,7 +229,8 @@ app.whenReady().then(async () => {
     isScanning: () => scanning,
     rebuild: startRebuild
   })
-  const runUpdateCheck = registerUpdater(() => mainWindow)
+  const updater = registerUpdater(() => mainWindow)
+  stopUpdater = updater.stop
   teardownListen = registerListen(() => mainWindow)
 
   createWindow()
@@ -248,8 +250,9 @@ app.whenReady().then(async () => {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('player:command', cmd)
   })
 
-  // Silent update check shortly after launch (renderer listener is attached by then).
-  setTimeout(() => void runUpdateCheck(), 2500)
+  // The renderer runs the first update check itself (updates-store init: a silent
+  // check + get-pending replay) — no launch setTimeout race. The updater arms its
+  // own 12h timer + wake re-check internally.
 
   // Restore the previously chosen library in the background.
   // FOLDERIFY_DEFAULT_ROOT is honored whenever no saved root exists (not persisted —
@@ -277,4 +280,5 @@ app.on('before-quit', () => {
   void cache.flush()
   void watcher?.stop()
   teardownListen()
+  stopUpdater()
 })

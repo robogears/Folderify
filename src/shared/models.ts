@@ -91,21 +91,38 @@ export interface PlayerSnapshot {
   hasTrack: boolean
 }
 
-/** Payload for an available update (main → renderer). */
-export interface UpdateAvailable {
-  version: string
-  downloadUrl: string
-  releaseUrl: string
-}
-
-/** Result of an update check. */
+/**
+ * Result of an update check — the single source of truth for the updater UI.
+ * `available` with NO `downloadUrl` (`reason: 'no-asset-for-arch'`) means the UI
+ * must route to `releaseUrl` — never self-install a wrong-arch build.
+ */
 export type UpdateCheck =
-  | { status: 'available'; version: string; downloadUrl: string; releaseUrl: string }
+  | {
+      status: 'available'
+      version: string
+      /** Release body markdown — the "What's new" content, already fetched. */
+      notes?: string
+      /** ISO 8601 from the release JSON. */
+      publishedAt?: string
+      /** ABSENT when no arch-matched asset exists — route to releaseUrl. */
+      downloadUrl?: string
+      /** Companion sidecar; verified in main, opaque to the UI. */
+      sha256Url?: string
+      releaseUrl: string
+      reason?: 'no-asset-for-arch'
+    }
   | { status: 'up-to-date'; version: string }
+  | { status: 'no-releases' }
+  | { status: 'rate-limited'; retryAfterSeconds?: number }
+  | { status: 'offline' }
   | { status: 'error'; message: string }
+
+/** The `update:available` push payload is exactly the available variant. */
+export type UpdateAvailable = Extract<UpdateCheck, { status: 'available' }>
 
 export interface UpdateProgress {
   downloaded: number
+  /** 0 => length unknown; render an INDETERMINATE bar, not a frozen "0%". */
   total: number
 }
 

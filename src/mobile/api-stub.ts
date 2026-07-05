@@ -76,9 +76,10 @@ export function installStubApi(): void {
     onPlayerState: subscribe,
     getAppVersion: async () => '0.1.5-ios',
     checkForUpdates: async () => ({ status: 'up-to-date', version: '0.1.5-ios' }),
+    getPendingUpdate: async () => null,
     canSelfInstall: async () => false,
     downloadUpdate: async () => ({ ok: false }),
-    applyUpdate: async () => {},
+    applyUpdate: async () => ({ ok: false }),
     openExternal: async () => {},
     onUpdateAvailable: subscribe,
     onUpdateProgress: subscribe

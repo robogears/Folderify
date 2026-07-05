@@ -35,6 +35,15 @@ jobs:
           # build/after-pack.js ad-hoc signs so Gatekeeper doesn't flag "damaged".
           CSC_IDENTITY_AUTODISCOVERY: 'false'
 
+      # SHA-256 sidecar per dmg — the updater fetches it and verifies the download
+      # before staging (format "<hex>  <filename>", which fetchExpectedSha parses).
+      - name: Generate checksums
+        run: |
+          cd release
+          for f in *.dmg; do
+            [ -f "$f" ] && shasum -a 256 "$f" > "$f.sha256"
+          done
+
       # Always upload the built .dmgs as downloadable CI artifacts. This makes a
       # manual "Run workflow" produce test builds without cutting a release.
       - name: Upload build artifacts
@@ -55,3 +64,4 @@ jobs:
           body_path: RELEASE_NOTES.md
           files: |
             release/*.dmg
+            release/*.dmg.sha256

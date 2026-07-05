@@ -35,8 +35,9 @@ const api: FolderifyApi = {
 
   getAppVersion: () => ipcRenderer.invoke('app:version'),
   checkForUpdates: () => ipcRenderer.invoke('update:check'),
+  getPendingUpdate: () => ipcRenderer.invoke('update:get-pending'),
   canSelfInstall: () => ipcRenderer.invoke('update:can-self-install'),
-  downloadUpdate: (url: string) => ipcRenderer.invoke('update:download', url),
+  downloadUpdate: () => ipcRenderer.invoke('update:download'),
   applyUpdate: () => ipcRenderer.invoke('update:apply'),
   openExternal: (url: string) => ipcRenderer.invoke('shell:open-external', url),
   onUpdateAvailable: (cb: (u: UpdateAvailable) => void) => subscribe('update:available', cb),
