@@ -1,26 +1,20 @@
-# What's new in v0.1.7
+# What's new in v0.1.8
 
-## Listen Together — play in sync with a friend (experimental)
+## Listen Together — now actually connects (experimental)
 
-- **New:** two Macs on the same Wi-Fi can now listen together. Either person picks a
-  song from **their own** library and it plays, **in sync**, on both Macs — the listener
-  needs **none** of the files. Open the **broadcast icon** in the top bar (left of
-  Rescan) on both Macs, share the **6-digit code**, and connect.
-- Whoever picks a track is **in control**; hand-off is automatic, and play / pause /
-  seek stay in step on both ends.
-- **Private by design:** the connection is peer-to-peer and encrypted (WebRTC/DTLS).
-  Only the **currently-playing track's audio** is shared — never your files, folders,
-  or library.
+v0.1.7 introduced Listen Together but couldn't reliably pair two Macs. This release fixes
+the connection path:
 
-> **Experimental & LAN-only.** This is a brand-new feature that needs two Macs on the
-> same Wi-Fi to exercise, so treat it as a preview: if a connection doesn't establish on
-> your network, nothing else in the app is affected. One-to-one only, no internet, and
-> the receiver doesn't show album art yet.
+- **Grant the network prompt.** The first time you open the Connect panel (broadcast icon,
+  top bar), macOS asks to let Folderify **"find and connect to devices on your local
+  network."** Allow it on **both** Macs — without it, macOS silently blocks the connection.
+- **Can't see the other Mac?** The panel now shows each Mac's **IP address** and pairing
+  code, and you can **connect by IP** directly when automatic discovery doesn't find it.
+- **No more endless spinner.** If it can't connect, Folderify now tells you why (wrong
+  Wi-Fi, permission not granted) instead of hanging on "Connecting…".
 
-## Also in this release
-
-- iPhone app polish (not part of this desktop app): fixed a freeze on large playlists,
-  Library moved to its own tab, shuffle-aware Play, and a cleaner lock-screen Now Playing.
+Still experimental and **LAN-only** (same Wi-Fi, one-to-one); the receiver doesn't show
+album art yet.
 
 ---
 
@@ -28,7 +22,7 @@
 
 - **Already on v0.1.2 or later?** Just click the in-app **Update** button (top bar or
   Settings → Updates) — it downloads and self-installs. No DMG needed.
-- **Fresh install (macOS, Apple Silicon):** download `Folderify-0.1.7-arm64.dmg`, open
+- **Fresh install (macOS, Apple Silicon):** download `Folderify-0.1.8-arm64.dmg`, open
   it, and drag Folderify to Applications.
 
 On a fresh install, macOS Gatekeeper holds the app back on first launch (it isn't
@@ -40,9 +34,10 @@ Your settings, metadata cache, and thumbnails live in `~/Library/Application Sup
 ## Requirements
 
 - macOS 11 (Big Sur) or later, on an Apple Silicon Mac.
-- Listen Together needs both Macs on the **same Wi-Fi / LAN**.
+- Listen Together needs both Macs on the **same Wi-Fi / LAN**, with the **local network
+  permission allowed** on each.
 - No account, API key, or subscription.
 
 ---
 
-**Full Changelog**: https://github.com/robogears/Folderify/compare/v0.1.6...v0.1.7
+**Full Changelog**: https://github.com/robogears/Folderify/compare/v0.1.7...v0.1.8
