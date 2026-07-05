@@ -26,6 +26,10 @@ mac:
     NSMusicFolderUsageDescription: Folderify reads your music folder to show and play your library.
     NSDocumentsFolderUsageDescription: Folderify reads music from folders you choose.
     NSDownloadsFolderUsageDescription: Folderify reads music from folders you choose.
+    # Listen Together discovers and connects to another Mac over the LAN. macOS 15+
+    # silently blocks multicast / local TCP / WebRTC-to-LAN without this — the string
+    # is what the "find devices on your local network" permission prompt shows.
+    NSLocalNetworkUsageDescription: Folderify uses your local network to find and connect to another Mac for Listen Together, so you can play music in sync over Wi-Fi.
 dmg:
   title: ${productName} ${version}
   artifactName: ${productName}-${version}-${arch}.${ext}

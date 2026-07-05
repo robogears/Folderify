@@ -410,10 +410,24 @@ the receiver plays its own copy, kept in lockstep by a clock-synced control prot
   `library-store` (`setRemoteTrack`) so NowPlayingBar/SeekBar/tray/MediaSession render the streamed
   track with no other UI changes. `player-store` gains `remote` + `_relay` (transport guards; never
   crosses IPC — `buildSnapshot` uses explicit fields). CSP `media-src` now allows `blob:`.
-- **Requires two-Mac device testing** (can't be exercised in one process): Chromium mDNS-ICE on a
-  real LAN, `RTCPeerConnection` under the shipped Electron build, and Blob first-sound latency.
-  **No cover art on the receiver yet** (synthetic track is `hasArt:false` → placeholder). Both are
-  the flagged next steps. To be discoverable/connectable a Mac must have the Connect panel open.
+- **macOS Local Network permission is mandatory.** macOS 15+/26 silently blocks multicast, the
+  signaling TCP, AND WebRTC-to-LAN until the user allows the "find devices on your local network"
+  prompt. `NSLocalNetworkUsageDescription` (electron-builder.yml `extendInfo`) supplies the prompt
+  text. The prompt only fires for a **packaged** ad-hoc-signed app (its Info.plist has the key) —
+  **`npm run dev` can't test this** (it runs Electron's own bundle). Test with `build:mac`.
+- **Fallbacks so it works when multicast is flaky:** the signaling server binds a **fixed port**
+  (`LISTEN_SIG_PORT` 50778, ephemeral only if taken), the idle panel shows this Mac's **LAN IP**,
+  and the discovery panel offers **"connect by IP"** (`listen:connect-manual` → unicast TCP, no
+  multicast needed). Unicast TCP + WebRTC still need the Local Network allow, but not the (managed,
+  un-grantable-ad-hoc) multicast entitlement.
+- **Failure is visible, not a hang:** a 15s connect timeout + `RTCPeerConnection` `failed` state
+  surface "Couldn't establish a direct connection…" instead of an infinite "Connecting…". `peer.ts`
+  buffers ICE candidates until the remote description is set (else a dropped candidate silently
+  kills the connection) and ignores transient `disconnected`. `console.info('[listen] …')` traces
+  every hop (ICE state, channel open, transfer start/finish) for device debugging.
+- **Still needs two-Mac device testing** (can't be exercised in one process) and **no receiver
+  cover art yet** (synthetic track `hasArt:false` → placeholder). To be discoverable/connectable a
+  Mac must have the Connect panel open.
 
 ---
 

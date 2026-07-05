@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto'
 import os from 'node:os'
 import { Discovery } from './discovery'
 import { Signaling } from './signaling'
+import { LISTEN_SIG_PORT } from '../../shared/listen'
 
 interface Identity {
   id: string
@@ -24,6 +25,17 @@ function genPin(): string {
   return String(Math.floor(100000 + Math.random() * 900000))
 }
 
+/** This Mac's non-internal IPv4 addresses (for "connect by IP" when discovery fails). */
+function localAddresses(): string[] {
+  const out: string[] = []
+  for (const iface of Object.values(os.networkInterfaces())) {
+    for (const a of iface ?? []) {
+      if (a.family === 'IPv4' && !a.internal) out.push(a.address)
+    }
+  }
+  return out
+}
+
 export function registerListen(getWindow: () => BrowserWindow | null): () => void {
   function send(channel: string, payload: unknown): void {
     const w = getWindow()
@@ -32,6 +44,7 @@ export function registerListen(getWindow: () => BrowserWindow | null): () => voi
 
   let discovery: Discovery | undefined
   let signaling: Signaling | undefined
+  let sigPort = 0
   let identity: Identity = { id: '', name: friendlyHostName(), pin: '' }
 
   function teardownNet(): void {
@@ -39,10 +52,11 @@ export function registerListen(getWindow: () => BrowserWindow | null): () => voi
     signaling = undefined
     discovery?.stop()
     discovery = undefined
+    sigPort = 0
   }
 
   // Start advertising + browsing + the signaling server. Idempotent; returns our
-  // identity (name + the PIN the other Mac must enter to connect to us).
+  // identity (name, the PIN the other Mac must enter, our LAN IPs, and the sig port).
   ipcMain.handle('listen:start', async () => {
     if (!signaling) {
       identity = { id: randomUUID(), name: friendlyHostName(), pin: genPin() }
@@ -56,6 +70,7 @@ export function registerListen(getWindow: () => BrowserWindow | null): () => voi
       })
       await new Promise<void>((resolve) => {
         signaling!.start((port) => {
+          sigPort = port
           discovery = new Discovery(
             { id: identity.id, name: identity.name, sigPort: port },
             (peers) => send('listen:peers', peers)
@@ -65,7 +80,13 @@ export function registerListen(getWindow: () => BrowserWindow | null): () => voi
         })
       })
     }
-    return { id: identity.id, name: identity.name, pin: identity.pin }
+    return {
+      id: identity.id,
+      name: identity.name,
+      pin: identity.pin,
+      addresses: localAddresses(),
+      sigPort
+    }
   })
 
   ipcMain.handle('listen:connect', async (_e, arg: unknown) => {
@@ -78,6 +99,22 @@ export function registerListen(getWindow: () => BrowserWindow | null): () => voi
       String(pin ?? ''),
       { id: identity.id, name: identity.name },
       { id: peer.id, name: peer.name }
+    )
+    return { ok: true }
+  })
+
+  // Connect by typed IP when multicast discovery doesn't surface the peer. Assumes the
+  // peer is on the fixed signaling port (the common case).
+  ipcMain.handle('listen:connect-manual', async (_e, arg: unknown) => {
+    const { host, pin } = (arg ?? {}) as { host?: string; pin?: string }
+    const cleanHost = String(host ?? '').trim()
+    if (!cleanHost || !signaling) return { ok: false, error: 'network' }
+    signaling.connect(
+      cleanHost,
+      LISTEN_SIG_PORT,
+      String(pin ?? ''),
+      { id: identity.id, name: identity.name },
+      { id: `manual:${cleanHost}`, name: cleanHost }
     )
     return { ok: true }
   })

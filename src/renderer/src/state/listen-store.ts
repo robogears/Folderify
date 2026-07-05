@@ -33,6 +33,8 @@ interface ListenState {
   deviceName: string
   /** 6-digit code the other Mac must enter to pair with us. */
   pin: string
+  /** This Mac's LAN IPv4 address(es) — shown so a peer can connect by IP. */
+  localAddresses: string[]
   /** Devices found on the LAN. */
   peers: ListenPeer[]
   /** The peer we're pairing with / connected to. */
@@ -45,6 +47,8 @@ interface ListenState {
   startDiscovery: () => void
   stopDiscovery: () => void
   selectPeer: (peer: ListenPeer) => void
+  /** Pair with a peer entered by IP address (multicast fallback). */
+  connectByIp: (host: string) => void
   confirmPairing: (enteredPin: string) => void
   cancelPairing: () => void
   disconnect: () => void
@@ -59,6 +63,7 @@ export const useListen = create<ListenState>((set, get) => ({
   status: 'idle',
   deviceName: 'This Mac',
   pin: makePin(),
+  localAddresses: [],
   peers: [],
   peer: null,
   role: null,
@@ -66,9 +71,9 @@ export const useListen = create<ListenState>((set, get) => ({
 
   openPanel: () => {
     set({ panelOpen: true })
-    // Begin advertising + discovery + signaling; adopt our real device name + PIN.
+    // Begin advertising + discovery + signaling; adopt our real name, PIN, and LAN IPs.
     void session.start().then((info) => {
-      if (info) set({ deviceName: info.name, pin: info.pin })
+      if (info) set({ deviceName: info.name, pin: info.pin, localAddresses: info.addresses })
     })
   },
 
@@ -93,6 +98,12 @@ export const useListen = create<ListenState>((set, get) => ({
 
   selectPeer: (peer) => set({ status: 'pairing', peer, error: null }),
 
+  connectByIp: (host) => {
+    const h = host.trim()
+    if (!h) return
+    set({ status: 'pairing', peer: { id: `manual:${h}`, name: h }, error: null })
+  },
+
   confirmPairing: (enteredPin) => {
     const code = enteredPin.trim()
     if (code.length < 6) {
@@ -102,7 +113,8 @@ export const useListen = create<ListenState>((set, get) => ({
     const peer = get().peer
     if (!peer) return
     set({ status: 'connecting', error: null })
-    session.connect(peer, code)
+    if (peer.id.startsWith('manual:')) session.connectManual(peer.id.slice('manual:'.length), code)
+    else session.connect(peer, code)
   },
 
   cancelPairing: () => {

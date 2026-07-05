@@ -14,12 +14,14 @@ export type Unsubscribe = () => void
 
 /** Listen Together — LAN discovery + WebRTC signaling relay (see shared/listen.ts). */
 export interface FolderifyListenApi {
-  /** Start advertising + discovery + signaling; resolves with our identity + PIN. */
-  start(): Promise<{ id: string; name: string; pin: string }>
+  /** Start advertising + discovery + signaling; resolves with our identity, LAN IPs, sig port. */
+  start(): Promise<{ id: string; name: string; pin: string; addresses: string[]; sigPort: number }>
   /** Stop advertising/discovery and tear down any connection. */
   stop(): Promise<{ ok: boolean }>
   /** Reach out to a discovered peer, presenting their PIN. */
   connect(peerId: string, pin: string): Promise<{ ok: boolean; error?: string }>
+  /** Reach out to a peer by typed IP (fixed sig port) when discovery didn't surface it. */
+  connectManual(host: string, pin: string): Promise<{ ok: boolean; error?: string }>
   /** Drop the current connection (keeps advertising). */
   disconnect(): Promise<{ ok: boolean }>
   /** Send a WebRTC SDP/ICE payload to the connected peer (relayed by main). */

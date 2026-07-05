@@ -13,6 +13,7 @@ export function ListenPanel(): JSX.Element | null {
   const status = useListen((s) => s.status)
   const deviceName = useListen((s) => s.deviceName)
   const pin = useListen((s) => s.pin)
+  const localAddresses = useListen((s) => s.localAddresses)
   const peers = useListen((s) => s.peers)
   const peer = useListen((s) => s.peer)
   const role = useListen((s) => s.role)
@@ -20,11 +21,13 @@ export function ListenPanel(): JSX.Element | null {
   const startDiscovery = useListen((s) => s.startDiscovery)
   const stopDiscovery = useListen((s) => s.stopDiscovery)
   const selectPeer = useListen((s) => s.selectPeer)
+  const connectByIp = useListen((s) => s.connectByIp)
   const confirmPairing = useListen((s) => s.confirmPairing)
   const cancelPairing = useListen((s) => s.cancelPairing)
   const disconnect = useListen((s) => s.disconnect)
 
   const [entered, setEntered] = useState('')
+  const [manualIp, setManualIp] = useState('')
 
   useEffect(() => {
     if (!open) return
@@ -64,12 +67,21 @@ export function ListenPanel(): JSX.Element | null {
                   <span className="settings-info-k">Your device</span>
                   <span className="settings-info-v">{deviceName}</span>
                 </div>
+                {localAddresses[0] && (
+                  <div className="settings-info-row">
+                    <span className="settings-info-k">Your IP</span>
+                    <span className="settings-info-v">{localAddresses[0]}</span>
+                  </div>
+                )}
                 <div className="settings-info-row">
                   <span className="settings-info-k">Pairing code</span>
                   <span className="settings-info-v listen-pin">{pin}</span>
                 </div>
               </div>
-              <p className="listen-hint">Share this code so the other Mac can connect to you.</p>
+              <p className="listen-hint">
+                Share this code (and IP, if needed) so the other Mac can connect to you.
+              </p>
+              {error && <p className="listen-error">{error}</p>}
               <button className="listen-cta" onClick={startDiscovery}>
                 Find nearby devices
               </button>
@@ -98,6 +110,31 @@ export function ListenPanel(): JSX.Element | null {
                   ))}
                 </div>
               )}
+              {error && <p className="listen-error">{error}</p>}
+
+              <div className="listen-manual">
+                <span className="listen-hint">Don’t see it? Enter the other Mac’s IP address:</span>
+                <div className="listen-actions">
+                  <input
+                    className="listen-ip-input"
+                    inputMode="decimal"
+                    placeholder="192.168.1.42"
+                    value={manualIp}
+                    onChange={(e) => setManualIp(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && manualIp.trim()) connectByIp(manualIp)
+                    }}
+                  />
+                  <button
+                    className="listen-cta"
+                    disabled={!manualIp.trim()}
+                    onClick={() => connectByIp(manualIp)}
+                  >
+                    Connect by IP
+                  </button>
+                </div>
+              </div>
+
               <button className="btn-ghost" onClick={stopDiscovery}>
                 Stop
               </button>
@@ -166,7 +203,9 @@ export function ListenPanel(): JSX.Element | null {
         </div>
 
         <footer className="listen-footer">
-          <span className="listen-note">Preview — device networking isn&rsquo;t wired up yet.</span>
+          <span className="listen-note">
+            Both Macs need Folderify open on the same Wi-Fi. Audio is sent peer-to-peer and encrypted.
+          </span>
         </footer>
       </div>
     </div>

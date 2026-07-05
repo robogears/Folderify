@@ -10,7 +10,8 @@ export interface PeerHandlers {
   onControl: (msg: unknown) => void
   onBytes: (buf: ArrayBuffer) => void
   onOpen: () => void
-  onClose: () => void
+  /** reason: 'failed' | 'closed' | 'channel-closed' — surfaced to the user. */
+  onClose: (reason?: string) => void
 }
 
 const BUFFER_HIGH = 8 * 1024 * 1024
@@ -20,6 +21,8 @@ export class ListenPeerConn {
   private pc: RTCPeerConnection
   private dc: RTCDataChannel | null = null
   private closed = false
+  private remoteDescSet = false
+  private pendingIce: RTCIceCandidateInit[] = []
 
   constructor(
     private role: 'caller' | 'callee',
@@ -38,9 +41,16 @@ export class ListenPeerConn {
         })
       }
     }
+    this.pc.oniceconnectionstatechange = () => {
+      console.info('[listen] ICE state:', this.pc.iceConnectionState)
+    }
     this.pc.onconnectionstatechange = () => {
       const st = this.pc.connectionState
-      if (st === 'failed' || st === 'disconnected' || st === 'closed') this.handleClose()
+      console.info('[listen] connection state:', st)
+      // 'disconnected' is often transient (ICE can recover) — only give up on a hard
+      // failure or an explicit close.
+      if (st === 'failed') this.handleClose('failed')
+      else if (st === 'closed') this.handleClose('closed')
     }
     // Callee receives the channel the caller created.
     this.pc.ondatachannel = (e) => this.bindChannel(e.channel)
@@ -59,8 +69,11 @@ export class ListenPeerConn {
     this.dc = dc
     dc.binaryType = 'arraybuffer'
     dc.bufferedAmountLowThreshold = BUFFER_LOW
-    dc.onopen = () => this.handlers.onOpen()
-    dc.onclose = () => this.handleClose()
+    dc.onopen = () => {
+      console.info('[listen] data channel open')
+      this.handlers.onOpen()
+    }
+    dc.onclose = () => this.handleClose('channel-closed')
     dc.onmessage = (e) => {
       if (typeof e.data === 'string') {
         try {
@@ -78,17 +91,34 @@ export class ListenPeerConn {
     try {
       if (p.kind === 'sdp') {
         await this.pc.setRemoteDescription({ type: p.type, sdp: p.sdp })
+        this.remoteDescSet = true
+        // Flush any ICE candidates that arrived before the remote description.
+        const queued = this.pendingIce.splice(0)
+        for (const c of queued) {
+          try {
+            await this.pc.addIceCandidate(c)
+          } catch (err) {
+            console.error('[listen] queued ICE add failed:', err)
+          }
+        }
         if (p.type === 'offer') {
           const answer = await this.pc.createAnswer()
           await this.pc.setLocalDescription(answer)
           this.sendSignal({ kind: 'sdp', type: 'answer', sdp: answer.sdp ?? '' })
         }
       } else if (p.kind === 'ice') {
-        await this.pc.addIceCandidate({
+        const cand: RTCIceCandidateInit = {
           candidate: p.candidate,
           sdpMid: p.sdpMid,
           sdpMLineIndex: p.sdpMLineIndex
-        })
+        }
+        // addIceCandidate throws if called before setRemoteDescription — queue instead,
+        // or a dropped candidate can silently prevent the connection.
+        if (!this.remoteDescSet) {
+          this.pendingIce.push(cand)
+          return
+        }
+        await this.pc.addIceCandidate(cand)
       }
     } catch (err) {
       console.error('[listen] signal handling error:', err)
@@ -133,10 +163,10 @@ export class ListenPeerConn {
     })
   }
 
-  private handleClose(): void {
+  private handleClose(reason?: string): void {
     if (this.closed) return
     this.closed = true
-    this.handlers.onClose()
+    this.handlers.onClose(reason)
   }
 
   close(): void {

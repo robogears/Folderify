@@ -57,5 +57,19 @@ export type ControlMsg =
 /** LAN discovery beacon group + port (link-local multicast, TTL 1). */
 export const LISTEN_MULTICAST_ADDR = '239.255.71.14'
 export const LISTEN_MULTICAST_PORT = 50777
+/** Preferred fixed TCP signaling port, so "connect by IP" knows where to reach a peer
+ *  even when multicast discovery is blocked. Falls back to an ephemeral port if taken. */
+export const LISTEN_SIG_PORT = 50778
 /** Max bytes per data-channel binary send (SCTP-safe portable chunk size). */
 export const LISTEN_CHUNK_SIZE = 16 * 1024
+
+/** Identity + reachability returned when advertising starts. */
+export interface ListenIdentity {
+  id: string
+  name: string
+  pin: string
+  /** This Mac's LAN IPv4 address(es) — shown so a peer can connect by IP. */
+  addresses: string[]
+  /** The TCP signaling port actually bound (LISTEN_SIG_PORT unless it was taken). */
+  sigPort: number
+}

@@ -4,7 +4,7 @@
 // renderers' SDP/ICE opaquely. Exactly one active connection at a time.
 
 import net from 'node:net'
-import type { ListenPeer } from '../../shared/listen'
+import { LISTEN_SIG_PORT, type ListenPeer } from '../../shared/listen'
 
 interface SignalingOpts {
   /** The 6-digit code an incoming caller must present to be accepted. */
@@ -54,12 +54,24 @@ export class Signaling {
 
   start(cb: (port: number) => void): void {
     const server = net.createServer((sock) => this.handleIncoming(sock))
-    server.on('error', (err) => console.error('[listen] signaling server error:', err))
-    server.listen(0, '0.0.0.0', () => {
+    const onListening = (): void => {
       const addr = server.address()
       this.port = addr && typeof addr === 'object' ? addr.port : 0
       cb(this.port)
+    }
+    let triedEphemeral = false
+    server.on('error', (err: NodeJS.ErrnoException) => {
+      // Preferred fixed port is taken (another instance on this Mac) — fall back to an
+      // ephemeral one. Manual "connect by IP" then only works for the fixed-port peer.
+      if (err.code === 'EADDRINUSE' && !triedEphemeral) {
+        triedEphemeral = true
+        server.listen(0, '0.0.0.0')
+        return
+      }
+      console.error('[listen] signaling server error:', err)
     })
+    server.on('listening', onListening)
+    server.listen(LISTEN_SIG_PORT, '0.0.0.0')
     this.server = server
   }
 

@@ -34,6 +34,7 @@ let currentBlobUrl: string | null = null
 let clockOffset = 0 // estimated (sourceClock - myClock) in ms
 let pingTimer: number | undefined
 let stateTimer: number | undefined
+let connectTimer: number | undefined
 let prevTrackId: string | null = null
 let prevPlaying = false
 
@@ -134,6 +135,7 @@ function initNative(): void {
 }
 
 function onConnected(peerRole: 'caller' | 'callee', p: ListenPeer): void {
+  console.info('[listen] signaling connected as', peerRole, '→ peer', p.name)
   connectedPeer = p
   role = 'idle'
   useListen.setState({ status: 'connecting', peer: p, role: null, error: null, panelOpen: true })
@@ -141,9 +143,32 @@ function onConnected(peerRole: 'caller' | 'callee', p: ListenPeer): void {
     onControl: (m) => handleControl(m as ControlMsg),
     onBytes: handleBytes,
     onOpen: onChannelOpen,
-    onClose: teardown
+    onClose: onPeerClosed
   })
   void peer.start()
+  // No WebRTC connection-attempt timeout exists natively — if ICE never completes
+  // (permission blocked, different subnets) the UI would hang on "Connecting…" forever.
+  if (connectTimer) window.clearTimeout(connectTimer)
+  connectTimer = window.setTimeout(() => {
+    if (useListen.getState().status !== 'connected') onPeerClosed('timeout')
+  }, 15000)
+}
+
+// The WebRTC connection dropped or never established. If we never reached a working
+// session, that almost always means a blocked LAN path (permission / different Wi-Fi) —
+// say so instead of silently returning to idle. A drop after a working session just
+// returns to idle quietly (the disconnect is self-explanatory).
+function onPeerClosed(_reason?: string): void {
+  const neverConnected = useListen.getState().status === 'connecting'
+  teardown()
+  if (neverConnected) {
+    useListen.setState({
+      status: 'idle',
+      error:
+        "Couldn't establish a direct connection. Check that both Macs are on the same " +
+        'Wi-Fi and that you allowed the “find devices on your local network” prompt, then try again.'
+    })
+  }
 }
 
 function onSignalError(e: { reason: string; message: string }): void {
@@ -155,6 +180,11 @@ function onSignalError(e: { reason: string; message: string }): void {
 }
 
 function onChannelOpen(): void {
+  console.info('[listen] session ready — data channel open')
+  if (connectTimer) {
+    window.clearTimeout(connectTimer)
+    connectTimer = undefined
+  }
   useListen.setState({ status: 'connected', error: null })
   startTimers()
   // If we're already playing a local track, immediately source it to the new peer.
@@ -185,6 +215,7 @@ async function becomeSourceFor(track: Track, position: number, playing: boolean)
     codec: track.codec,
     ext: extOf(track.path)
   }
+  console.info('[listen] sourcing track to peer:', track.title, `(${track.size} bytes)`)
   peer.send({ t: 'load', transferId, size: track.size, meta, position, playing })
   try {
     const res = await fetch(mediaUrl(track.path))
@@ -296,6 +327,7 @@ function handleBytes(buf: ArrayBuffer): void {
 function finalizeReceive(transferId: number): void {
   if (!rx || rx.transferId !== transferId || rx.done) return
   rx.done = true
+  console.info('[listen] received track:', rx.meta.title, `(${rx.received} bytes) → playing`)
   const blob = new Blob(rx.chunks as BlobPart[], { type: mimeFor(rx.meta.ext) })
   if (currentBlobUrl) URL.revokeObjectURL(currentBlobUrl)
   currentBlobUrl = URL.createObjectURL(blob)
@@ -344,8 +376,10 @@ function startTimers(): void {
 function stopTimers(): void {
   if (pingTimer) window.clearInterval(pingTimer)
   if (stateTimer) window.clearInterval(stateTimer)
+  if (connectTimer) window.clearTimeout(connectTimer)
   pingTimer = undefined
   stateTimer = undefined
+  connectTimer = undefined
 }
 
 function teardown(): void {
@@ -399,14 +433,22 @@ function clearSim(): void {
 }
 
 // ============================================================ public API (store → session)
-export async function start(): Promise<{ name: string; pin: string } | null> {
+export async function start(): Promise<{
+  name: string
+  pin: string
+  addresses: string[]
+} | null> {
   if (!hasNative) {
-    return { name: 'This Mac', pin: String(Math.floor(100000 + Math.random() * 900000)) }
+    return {
+      name: 'This Mac',
+      pin: String(Math.floor(100000 + Math.random() * 900000)),
+      addresses: ['192.168.1.42']
+    }
   }
   initNative()
   try {
     const info = await window.api.listen.start()
-    return { name: info.name, pin: info.pin }
+    return { name: info.name, pin: info.pin, addresses: info.addresses }
   } catch {
     return null
   }
@@ -445,6 +487,16 @@ export function connect(p: ListenPeer, pin: string): void {
   }
   void window.api.listen.connect(p.id, pin).then((r) => {
     if (!r.ok) onSignalError({ reason: r.error ?? 'peer-gone', message: r.error ?? '' })
+  })
+}
+
+export function connectManual(host: string, pin: string): void {
+  if (!hasNative) {
+    connect({ id: `manual:${host}`, name: host }, pin)
+    return
+  }
+  void window.api.listen.connectManual(host, pin).then((r) => {
+    if (!r.ok) onSignalError({ reason: r.error ?? 'network', message: r.error ?? '' })
   })
 }
 
