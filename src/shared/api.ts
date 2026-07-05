@@ -8,8 +8,28 @@ import type {
   UpdateCheck,
   UpdateProgress
 } from './models'
+import type { ListenPeer, ListenConnected, ListenErrorPayload, SignalPayload } from './listen'
 
 export type Unsubscribe = () => void
+
+/** Listen Together — LAN discovery + WebRTC signaling relay (see shared/listen.ts). */
+export interface FolderifyListenApi {
+  /** Start advertising + discovery + signaling; resolves with our identity + PIN. */
+  start(): Promise<{ id: string; name: string; pin: string }>
+  /** Stop advertising/discovery and tear down any connection. */
+  stop(): Promise<{ ok: boolean }>
+  /** Reach out to a discovered peer, presenting their PIN. */
+  connect(peerId: string, pin: string): Promise<{ ok: boolean; error?: string }>
+  /** Drop the current connection (keeps advertising). */
+  disconnect(): Promise<{ ok: boolean }>
+  /** Send a WebRTC SDP/ICE payload to the connected peer (relayed by main). */
+  sendSignal(payload: SignalPayload): void
+  onPeers(cb: (peers: ListenPeer[]) => void): Unsubscribe
+  onConnected(cb: (c: ListenConnected) => void): Unsubscribe
+  onSignal(cb: (payload: SignalPayload) => void): Unsubscribe
+  onError(cb: (e: ListenErrorPayload) => void): Unsubscribe
+  onDisconnected(cb: () => void): Unsubscribe
+}
 
 /** The minimal, typed surface exposed to the renderer as `window.api`. */
 export interface FolderifyApi {
@@ -50,4 +70,7 @@ export interface FolderifyApi {
   openExternal(url: string): Promise<void>
   onUpdateAvailable(cb: (u: UpdateAvailable) => void): Unsubscribe
   onUpdateProgress(cb: (p: UpdateProgress) => void): Unsubscribe
+
+  // --- Listen Together (LAN peer-to-peer playback) ---
+  listen: FolderifyListenApi
 }

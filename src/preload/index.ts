@@ -9,6 +9,7 @@ import type {
   UpdateAvailable,
   UpdateProgress
 } from '../shared/models'
+import type { ListenPeer, ListenConnected, ListenErrorPayload, SignalPayload } from '../shared/listen'
 
 function subscribe<T>(channel: string, cb: (payload: T) => void): Unsubscribe {
   const listener = (_e: IpcRendererEvent, payload: T): void => cb(payload)
@@ -39,7 +40,20 @@ const api: FolderifyApi = {
   applyUpdate: () => ipcRenderer.invoke('update:apply'),
   openExternal: (url: string) => ipcRenderer.invoke('shell:open-external', url),
   onUpdateAvailable: (cb: (u: UpdateAvailable) => void) => subscribe('update:available', cb),
-  onUpdateProgress: (cb: (p: UpdateProgress) => void) => subscribe('update:download-progress', cb)
+  onUpdateProgress: (cb: (p: UpdateProgress) => void) => subscribe('update:download-progress', cb),
+
+  listen: {
+    start: () => ipcRenderer.invoke('listen:start'),
+    stop: () => ipcRenderer.invoke('listen:stop'),
+    connect: (peerId: string, pin: string) => ipcRenderer.invoke('listen:connect', { peerId, pin }),
+    disconnect: () => ipcRenderer.invoke('listen:disconnect'),
+    sendSignal: (payload: SignalPayload) => ipcRenderer.send('listen:signal', payload),
+    onPeers: (cb: (peers: ListenPeer[]) => void) => subscribe('listen:peers', cb),
+    onConnected: (cb: (c: ListenConnected) => void) => subscribe('listen:connected', cb),
+    onSignal: (cb: (p: SignalPayload) => void) => subscribe('listen:signal', cb),
+    onError: (cb: (e: ListenErrorPayload) => void) => subscribe('listen:error', cb),
+    onDisconnected: (cb: () => void) => subscribe('listen:disconnected', () => cb())
+  }
 }
 
 // Only the whitelisted `api` surface crosses the bridge — never raw ipcRenderer.

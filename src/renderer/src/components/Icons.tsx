@@ -173,6 +173,16 @@ export const RefreshIcon = (p: IconProps): JSX.Element => (
   </Stroke>
 )
 
+export const ConnectIcon = (p: IconProps): JSX.Element => (
+  <Stroke {...p}>
+    <path d="M7.5 7a7 7 0 0 0 0 10" />
+    <path d="M4.8 4.5a11 11 0 0 0 0 15" />
+    <path d="M16.5 7a7 7 0 0 1 0 10" />
+    <path d="M19.2 4.5a11 11 0 0 1 0 15" />
+    <circle cx="12" cy="12" r="1.7" fill="currentColor" stroke="none" />
+  </Stroke>
+)
+
 export const DotsIcon = (p: IconProps): JSX.Element => (
   <Fill {...p}>
     <circle cx="5" cy="12" r="1.7" />

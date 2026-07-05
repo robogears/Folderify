@@ -2310,3 +2310,235 @@
   opacity: 0.7;
   cursor: default;
 }
+
+/* ====================================================== Listen / Connect modal */
+/* The TopBar Connect button turns accent when a session is live. */
+.icon-btn.is-live {
+  color: var(--accent-hover);
+}
+
+.listen-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: var(--sp-6);
+  background: var(--scrim);
+  backdrop-filter: blur(6px);
+  animation: fade-in var(--t-base);
+}
+.listen-modal {
+  width: min(440px, 100%);
+  max-height: min(86vh, 720px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--surface-1);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-xl);
+  box-shadow: 0 30px 80px -20px rgba(0, 0, 0, 0.7);
+  animation: fade-up var(--t-slow) var(--ease-out);
+}
+.listen-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--sp-5) var(--sp-6);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.listen-title {
+  font-size: var(--fs-section);
+  font-weight: var(--fw-semibold);
+}
+.listen-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  padding: var(--sp-5) var(--sp-6);
+  overflow-y: auto;
+}
+.listen-footer {
+  padding: var(--sp-3) var(--sp-6);
+  border-top: 1px solid var(--border-subtle);
+}
+.listen-note {
+  font-size: var(--fs-eyebrow);
+  color: var(--text-faint);
+}
+
+.listen-lead {
+  font-size: var(--fs-body);
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+.listen-hint {
+  font-size: var(--fs-meta);
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+.listen-error {
+  font-size: var(--fs-meta);
+  color: #ff6b6b;
+}
+
+.listen-pin {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: var(--fw-semibold);
+  letter-spacing: 2px;
+  color: var(--text-primary);
+}
+.listen-pin-input {
+  height: 46px;
+  padding: 0 var(--sp-4);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  color: var(--text-primary);
+  font-size: 1.15rem;
+  letter-spacing: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  outline: none;
+  transition: border-color var(--t-base), box-shadow var(--t-base);
+}
+.listen-pin-input::placeholder {
+  color: var(--text-faint);
+  letter-spacing: 6px;
+}
+.listen-pin-input:focus {
+  border-color: rgba(124, 92, 255, 0.5);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.listen-cta {
+  align-self: flex-start;
+  height: 38px;
+  padding: 0 18px;
+  border-radius: var(--r-md);
+  background: var(--accent);
+  color: #0b0b0f;
+  font-size: var(--fs-body);
+  font-weight: var(--fw-semibold);
+  transition: background var(--t-fast), transform var(--t-fast);
+}
+.listen-cta:hover {
+  background: var(--accent-hover);
+}
+.listen-cta:active {
+  transform: scale(0.98);
+}
+
+.listen-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+.listen-section-title {
+  font-size: var(--fs-eyebrow);
+  font-weight: var(--fw-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-faint);
+}
+.listen-spinner {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent);
+  animation: spin 0.8s linear infinite;
+}
+.listen-spinner-lg {
+  width: 26px;
+  height: 26px;
+  border-width: 3px;
+}
+
+.listen-peers {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.listen-peer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  text-align: left;
+  transition: background var(--t-fast), border-color var(--t-fast);
+}
+.listen-peer:hover {
+  background: var(--surface-3);
+  border-color: var(--accent);
+}
+.listen-peer-name {
+  font-size: var(--fs-body);
+  font-weight: var(--fw-medium);
+  color: var(--text-primary);
+}
+.listen-peer-go {
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-semibold);
+  color: var(--accent-hover);
+}
+
+.listen-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.listen-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-6) 0;
+}
+
+.listen-connected {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+.listen-dot {
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #35d07f;
+  box-shadow: 0 0 0 4px rgba(53, 208, 127, 0.15);
+}
+.listen-connected-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.listen-connected-name {
+  font-size: var(--fs-body);
+  font-weight: var(--fw-medium);
+  color: var(--text-primary);
+}
+.listen-disconnect {
+  align-self: flex-start;
+  color: #ff6b6b;
+}
+.listen-disconnect:hover:not(:disabled) {
+  background: rgba(255, 107, 107, 0.12);
+  color: #ff8080;
+}
+
+/* Light theme: soften the modal shadow like the settings modal. */
+.app[data-layout='clean_01'] .listen-modal {
+  box-shadow: 0 32px 80px -28px rgba(28, 28, 48, 0.32);
+}

@@ -76,6 +76,29 @@ class AudioEngine {
     this.audio.load()
   }
 
+  /**
+   * Play audio from a blob:/object URL (Listen Together receiver mode) instead of a
+   * media:// path — the bytes arrived over the network, not from local disk. Seeks to
+   * startTime and optionally autoplays once metadata is ready.
+   */
+  loadRemote(url: string, startTime: number, autoplay: boolean): void {
+    this.durationFixTried = false
+    this.audio.src = url
+    this.audio.load()
+    const onMeta = (): void => {
+      this.audio.removeEventListener('loadedmetadata', onMeta)
+      if (startTime > 0) {
+        try {
+          this.audio.currentTime = startTime
+        } catch {
+          /* ignore */
+        }
+      }
+      if (autoplay) void this.play()
+    }
+    this.audio.addEventListener('loadedmetadata', onMeta)
+  }
+
   /** Load a track WITHOUT playing, seeking to startTime once metadata is ready. */
   prepare(url: string, startTime: number): void {
     this.durationFixTried = false

@@ -7,6 +7,9 @@ import type { Track } from '@shared/models'
 
 export type RepeatMode = 'off' | 'all' | 'one'
 
+/** Transport intent relayed to the Listen Together source when in remote mode. */
+export type RelayCommand = (c: { type: 'play' | 'pause' | 'seek'; value?: number }) => void
+
 interface PlayerState {
   queue: string[]
   originalQueue: string[]
@@ -20,6 +23,10 @@ interface PlayerState {
   shuffle: boolean
   repeat: RepeatMode
   contextLabel: string | null
+  /** True while playback is driven by a remote Listen Together source. */
+  remote: boolean
+  /** Set by the listen session; relays transport intents to the source when remote. */
+  _relay: RelayCommand | null
 
   playContext: (trackIds: string[], startId: string, label?: string) => void
   /** Load a previously-played track (paused) into its playlist context. */
@@ -69,7 +76,10 @@ const initialRepeat = ((): RepeatMode => {
 
 function saveLast(trackId: string | null, time: number): void {
   try {
-    if (trackId) localStorage.setItem(LAST_KEY, JSON.stringify({ trackId, time }))
+    // Never persist a synthetic remote (Listen Together) track — it can't be restored.
+    if (trackId && !trackId.startsWith('remote:')) {
+      localStorage.setItem(LAST_KEY, JSON.stringify({ trackId, time }))
+    }
   } catch {
     /* ignore */
   }
@@ -133,9 +143,16 @@ export const usePlayer = create<PlayerState>((set, get) => {
     shuffle: initialShuffle,
     repeat: initialRepeat,
     contextLabel: null,
+    remote: false,
+    _relay: null,
 
     playContext: (trackIds, startId, label) => {
       if (trackIds.length === 0) return
+      // Picking a local track ends remote (receiver) mode — we become the source.
+      if (get().remote) {
+        useLibrary.getState().setRemoteTrack(null)
+        set({ remote: false, _relay: null })
+      }
       const { shuffle } = get()
       const queue = shuffle ? shuffled(trackIds, startId) : trackIds.slice()
       set({ originalQueue: trackIds.slice(), queue, contextLabel: label ?? null })
@@ -180,13 +197,19 @@ export const usePlayer = create<PlayerState>((set, get) => {
     },
 
     togglePlay: () => {
-      const { currentTrackId, isPlaying } = get()
+      const { currentTrackId, isPlaying, remote, _relay } = get()
       if (!currentTrackId) return
+      if (remote) {
+        // The source is authoritative — relay the intent, don't touch the engine.
+        _relay?.({ type: isPlaying ? 'pause' : 'play' })
+        return
+      }
       if (isPlaying) engine.pause()
       else void engine.play()
     },
 
     next: (auto = false) => {
+      if (get().remote) return // the source drives track changes
       const { repeat, index } = get()
       if (auto && repeat === 'one') {
         engine.seek(0)
@@ -202,6 +225,7 @@ export const usePlayer = create<PlayerState>((set, get) => {
     },
 
     prev: () => {
+      if (get().remote) return // the source drives track changes
       if (engine.currentTime > 3) {
         engine.seek(0)
         return
@@ -213,6 +237,11 @@ export const usePlayer = create<PlayerState>((set, get) => {
     },
 
     seek: (seconds) => {
+      const { remote, _relay } = get()
+      if (remote) {
+        // Optimistic local seek + relay; the source echoes authoritative state back.
+        _relay?.({ type: 'seek', value: seconds })
+      }
       engine.seek(seconds)
       set({ currentTime: seconds })
     },

@@ -5,6 +5,7 @@ import { TRAY_ICON_1X, TRAY_ICON_2X } from './tray-icon'
 import { registerSchemes, registerProtocolHandlers } from './protocols'
 import { registerIpc } from './ipc'
 import { registerUpdater } from './updater'
+import { registerListen } from './listen'
 import { MetaCache } from './cache'
 import { Library } from './library/model'
 import { LibraryWatcher } from './library/watcher'
@@ -21,6 +22,7 @@ let watcher: LibraryWatcher
 let mainWindow: BrowserWindow | null = null
 let miniWindow: BrowserWindow | null = null
 let tray: Tray | null = null
+let teardownListen: () => void = () => {}
 
 let scanning = false
 let queuedRoot: string | null = null
@@ -32,6 +34,11 @@ function send<C extends string, T>(channel: C, payload: T): void {
 // Route macOS hardware media keys (F7/F8/F9) to the renderer's MediaSession action
 // handlers instead of letting the system swallow them. Must be set before app ready.
 app.commandLine.appendSwitch('enable-features', 'HardwareMediaKeyHandling,MediaSessionService')
+
+// Listen Together connects two Macs directly on the LAN. Chromium otherwise replaces
+// local IPs with .local mDNS names in WebRTC ICE candidates; disabling that lets host
+// candidates carry real LAN IPs so same-subnet peers connect without any STUN server.
+app.commandLine.appendSwitch('disable-features', 'WebRtcHideLocalIpsWithMdns')
 
 // Custom schemes must be registered before the app is ready.
 registerSchemes()
@@ -200,7 +207,7 @@ app.whenReady().then(async () => {
             "style-src 'self' app: 'unsafe-inline'; " +
             "font-src 'self' app: data:; " +
             "img-src 'self' app: cover: data:; " +
-            "media-src 'self' media:; " +
+            "media-src 'self' media: blob:; " +
             "connect-src 'self' app: cover: media:; " +
             "object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
         ]
@@ -222,6 +229,7 @@ app.whenReady().then(async () => {
     rebuild: startRebuild
   })
   const runUpdateCheck = registerUpdater(() => mainWindow)
+  teardownListen = registerListen(() => mainWindow)
 
   createWindow()
   createMiniWindow()
@@ -268,4 +276,5 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   void cache.flush()
   void watcher?.stop()
+  teardownListen()
 })

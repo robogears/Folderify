@@ -1,7 +1,8 @@
 import { useState, type JSX } from 'react'
 import { useLibrary } from '../state/library-store'
 import { useSettings } from '../state/settings-store'
-import { SearchIcon, RefreshIcon, FolderIcon, GearIcon, CloseIcon } from './Icons'
+import { useListen } from '../state/listen-store'
+import { SearchIcon, RefreshIcon, FolderIcon, GearIcon, CloseIcon, ConnectIcon } from './Icons'
 import { UpdateButton } from './UpdateButton'
 
 export function TopBar(): JSX.Element {
@@ -14,6 +15,8 @@ export function TopBar(): JSX.Element {
   const forget = useLibrary((s) => s.forget)
   const scanning = useLibrary((s) => s.scanning)
   const openSettings = useSettings((s) => s.openSettings)
+  const openConnect = useListen((s) => s.openPanel)
+  const listenLive = useListen((s) => s.status === 'connected')
 
   const [menuOpen, setMenuOpen] = useState(false)
 
@@ -37,6 +40,13 @@ export function TopBar(): JSX.Element {
 
       <div className="topbar-right no-drag">
         <UpdateButton className="update-pill" />
+        <button
+          className={`icon-btn ${listenLive ? 'is-live' : ''}`}
+          title={listenLive ? 'Listening together' : 'Listen together'}
+          onClick={openConnect}
+        >
+          <ConnectIcon size={18} />
+        </button>
         <button
           className={`icon-btn ${scanning ? 'is-spinning' : ''}`}
           title="Rescan folder"

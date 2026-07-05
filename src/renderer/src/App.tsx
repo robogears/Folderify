@@ -7,6 +7,7 @@ import { Sidebar } from './components/Sidebar'
 import { TopBar } from './components/TopBar'
 import { EmptyState } from './components/EmptyState'
 import { SettingsPanel } from './components/SettingsPanel'
+import { ListenPanel } from './components/ListenPanel'
 import { NowPlayingBar } from './components/NowPlayingBar'
 import { FolderHero } from './components/FolderHero'
 import { TrackList } from './components/TrackList'
@@ -233,6 +234,7 @@ export function App(): JSX.Element {
       </main>
       <NowPlayingBar />
       <SettingsPanel />
+      <ListenPanel />
       <Toast />
     </div>
   )

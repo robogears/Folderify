@@ -371,6 +371,52 @@ whole directory (full).
 
 ---
 
+## Listen Together (LAN peer-to-peer playback) — desktop only
+
+Two Macs on the **same Wi-Fi** pair 1:1 and play in sync; either can pick a track from **their
+own** library and it streams to the other (the listener needs none of the files). Full design +
+rationale in `docs/listen-together-design.md`. **Zero new dependencies** (uses Node's `dgram`/`net`
++ Chromium WebRTC). The Connect UI entry point is the broadcast icon in the TopBar, left of Rescan.
+
+**Why data-channel file streaming, not `captureStream()`:** research-confirmed that
+`captureStream()`/Web Audio on a cross-origin/custom-scheme element only yields non-silent output if
+the element sets `crossOrigin` — which is exactly the tainting trap that broke `media://` playback
+(see the crossOrigin gotcha). So we stream the **encoded file bytes** over an `RTCDataChannel` and
+the receiver plays its own copy, kept in lockstep by a clock-synced control protocol.
+
+- **Discovery** (`src/main/listen/discovery.ts`) — self-rolled UDP **multicast beacon** (group
+  `239.255.71.14:50777`, TTL 1). Each instance announces `{id, name, sigPort}` every 2s; peers age
+  out after ~6.5s. Simpler than mDNS and both ends are Folderify.
+- **Signaling** (`src/main/listen/signaling.ts`) — a `net` TCP relay (newline-delimited JSON). The
+  caller connects to the peer's advertised `sigPort`, sends `hello{pin}`; the callee validates the
+  PIN against its own advertised code (**the PIN _is_ the pairing approval**), then relays SDP/ICE.
+  One active connection at a time.
+- **`src/main/listen/index.ts`** — wires the two, owns identity (`randomUUID` id, hostname, 6-digit
+  PIN), exposes IPC (`listen:start/connect/disconnect/stop` + `listen:signal`) and pushes
+  `listen:peers/connected/signal/error/disconnected`. Registered in `main/index.ts` startup;
+  torn down on `before-quit`.
+- **WebRTC** lives in the **renderer**: `src/renderer/src/listen/peer.ts` (one `RTCPeerConnection`,
+  **one** data channel carrying both JSON control frames and binary audio — string vs ArrayBuffer
+  discriminates, so `load` can't race the bytes it describes; `iceServers: []` since host
+  candidates connect on a LAN). `main/index.ts` sets `disable-features=WebRtcHideLocalIpsWithMdns`
+  so ICE candidates carry real LAN IPs.
+- **Protocol brain**: `src/renderer/src/listen/session.ts`. Source `fetch()`es its own `media://`
+  bytes → chunks (16KB, backpressure) → peer; receiver reassembles → **Blob URL** →
+  `engine.loadRemote()`. Sync = authoritative-source `state{position, atClock}` + ping/pong clock
+  offset, drift-corrected past 0.4s. Whoever picks a track becomes the source (two-way handoff);
+  receiver play/pause/seek relay to the source. Falls back to a **local simulation** when
+  `window.api.listen` is absent (browser harness / non-Electron), so the UI still works.
+- **Receiver rendering**: a **synthetic `Track`** (id `remote:*`) is injected into
+  `library-store` (`setRemoteTrack`) so NowPlayingBar/SeekBar/tray/MediaSession render the streamed
+  track with no other UI changes. `player-store` gains `remote` + `_relay` (transport guards; never
+  crosses IPC — `buildSnapshot` uses explicit fields). CSP `media-src` now allows `blob:`.
+- **Requires two-Mac device testing** (can't be exercised in one process): Chromium mDNS-ICE on a
+  real LAN, `RTCPeerConnection` under the shipped Electron build, and Blob first-sound latency.
+  **No cover art on the receiver yet** (synthetic track is `hasArt:false` → placeholder). Both are
+  the flagged next steps. To be discoverable/connectable a Mac must have the Connect panel open.
+
+---
+
 ## iOS app (Capacitor) — `ios/`, `src/mobile/`, `vite.mobile.config.ts`
 
 The iPhone app reuses the **same React renderer + stores** inside a WKWebView via Capacitor 8
@@ -494,6 +540,8 @@ npm run ios:open       # open the Xcode project (build/run on device from Xcode)
 - Track list uses CSS `content-visibility` for virtualization (no `react-window` yet).
 - Search filters the whole library; no per-folder search scope.
 - SettingsPanel footer hard-codes "Folderify v1" (the Updates row shows the real version).
+- **Listen Together** is built and typechecks/builds, but cross-machine connection is **untested**
+  (needs two Macs). No receiver cover art yet, no internet/NAT (LAN only). See its section above.
 
 **iOS (Phase 4 candidates)**
 - **Background-audio reliability is WebKit's, not ours.** Audio playback lives in the WKWebView

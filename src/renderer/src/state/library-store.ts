@@ -13,6 +13,8 @@ interface LibraryState {
   scanning: boolean
   progress: ScanProgress | null
   ready: boolean
+  /** Synthetic track streamed from a Listen Together peer (id `remote:*`), if any. */
+  remoteTrack: Track | null
 
   /** null = Home, ALL_SONGS_ID = all songs, otherwise a playlist id. */
   selection: string | null
@@ -26,6 +28,8 @@ interface LibraryState {
   chooseFolder: () => Promise<void>
   rescan: () => Promise<void>
   forget: () => Promise<void>
+  /** Inject/replace the synthetic remote track so the UI can render it, or clear it. */
+  setRemoteTrack: (track: Track | null) => void
 }
 
 let initialized = false
@@ -38,6 +42,7 @@ export const useLibrary = create<LibraryState>((set, get) => ({
   scanning: false,
   progress: null,
   ready: false,
+  remoteTrack: null,
   selection: null,
   search: '',
 
@@ -61,6 +66,9 @@ export const useLibrary = create<LibraryState>((set, get) => ({
   applyModel: (m: LibraryModel) => {
     const tracksById = new Map<string, Track>()
     for (const t of m.tracks) tracksById.set(t.id, t)
+    // A full model rebuild wipes the map — re-inject any active remote track.
+    const rt = get().remoteTrack
+    if (rt) tracksById.set(rt.id, rt)
     set((s) => ({
       root: m.root,
       rootName: m.rootName,
@@ -95,6 +103,15 @@ export const useLibrary = create<LibraryState>((set, get) => ({
 
   select: (id) => set({ selection: id }),
   setSearch: (q) => set({ search: q }),
+
+  setRemoteTrack: (track) => {
+    set((s) => {
+      const tracksById = new Map(s.tracksById)
+      if (s.remoteTrack) tracksById.delete(s.remoteTrack.id)
+      if (track) tracksById.set(track.id, track)
+      return { remoteTrack: track, tracksById }
+    })
+  },
 
   chooseFolder: async () => {
     try {
