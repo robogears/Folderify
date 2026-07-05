@@ -1,20 +1,23 @@
-# What's new in v0.1.8
+# What's new in v0.1.9
 
-## Listen Together — now actually connects (experimental)
+## More reliable, more secure updates
 
-v0.1.7 introduced Listen Together but couldn't reliably pair two Macs. This release fixes
-the connection path:
+The in-app updater is rebuilt on a hardened path:
 
-- **Grant the network prompt.** The first time you open the Connect panel (broadcast icon,
-  top bar), macOS asks to let Folderify **"find and connect to devices on your local
-  network."** Allow it on **both** Macs — without it, macOS silently blocks the connection.
-- **Can't see the other Mac?** The panel now shows each Mac's **IP address** and pairing
-  code, and you can **connect by IP** directly when automatic discovery doesn't find it.
-- **No more endless spinner.** If it can't connect, Folderify now tells you why (wrong
-  Wi-Fi, permission not granted) instead of hanging on "Connecting…".
+- **Checksum-verified downloads.** Every update is verified against a SHA-256 published
+  with the release before it's installed — a corrupted or truncated download is caught
+  and rejected instead of installed.
+- **Clearer feedback.** Instead of a generic "couldn't reach GitHub," a manual check now
+  tells you exactly what happened — **"You're offline"**, **"Rate-limited — retry in Ns"**,
+  or **"No releases yet"** — and recovers on its own when you're back online.
+- **Quota-friendly checks** (they won't trip GitHub's rate limit), respect for **system
+  proxies** and the macOS certificate store, and an automatic re-check after your Mac
+  **wakes from sleep**.
+- **Under the hood:** closed a couple of update-path security gaps (the app downloads
+  only its own verified release asset now) and made the install swap safer — it re-signs
+  **and verifies** the new app, and rolls back to the old one on any failure.
 
-Still experimental and **LAN-only** (same Wi-Fi, one-to-one); the receiver doesn't show
-album art yet.
+> This hardened updater takes effect for updates **from v0.1.9 onward**.
 
 ---
 
@@ -22,7 +25,7 @@ album art yet.
 
 - **Already on v0.1.2 or later?** Just click the in-app **Update** button (top bar or
   Settings → Updates) — it downloads and self-installs. No DMG needed.
-- **Fresh install (macOS, Apple Silicon):** download `Folderify-0.1.8-arm64.dmg`, open
+- **Fresh install (macOS, Apple Silicon):** download `Folderify-0.1.9-arm64.dmg`, open
   it, and drag Folderify to Applications.
 
 On a fresh install, macOS Gatekeeper holds the app back on first launch (it isn't
@@ -34,10 +37,8 @@ Your settings, metadata cache, and thumbnails live in `~/Library/Application Sup
 ## Requirements
 
 - macOS 11 (Big Sur) or later, on an Apple Silicon Mac.
-- Listen Together needs both Macs on the **same Wi-Fi / LAN**, with the **local network
-  permission allowed** on each.
 - No account, API key, or subscription.
 
 ---
 
-**Full Changelog**: https://github.com/robogears/Folderify/compare/v0.1.7...v0.1.8
+**Full Changelog**: https://github.com/robogears/Folderify/compare/v0.1.8...v0.1.9
