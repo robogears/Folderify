@@ -1,6 +1,7 @@
 import { app, BrowserWindow, session, Tray, Menu, nativeImage, screen, ipcMain } from 'electron'
 import { join } from 'node:path'
 import { stat } from 'node:fs/promises'
+import { mkdirSync, appendFileSync } from 'node:fs'
 import { TRAY_ICON_1X, TRAY_ICON_2X } from './tray-icon'
 import { registerSchemes, registerProtocolHandlers } from './protocols'
 import { registerIpc } from './ipc'
@@ -31,6 +32,25 @@ let queuedRoot: string | null = null
 function send<C extends string, T>(channel: C, payload: T): void {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload)
 }
+
+// Last-resort diagnostics for the main process (the only one with disk + network). An
+// unexpected throw/rejection here can otherwise leave the app half-dead with nothing
+// logged; write a breadcrumb so field failures are debuggable. Kept non-fatal — main
+// owns the tray/mini-window and shouldn't hard-exit on a stray rejection.
+function logMainCrash(kind: string, err: unknown): void {
+  const detail = err instanceof Error ? err.stack || err.message : String(err)
+  const line = `[${new Date().toISOString()}] ${kind}: ${detail}\n`
+  console.error(line)
+  try {
+    const dir = join(app.getPath('userData'), 'logs')
+    mkdirSync(dir, { recursive: true })
+    appendFileSync(join(dir, 'main-crash.log'), line)
+  } catch {
+    /* ignore — logging must never itself throw */
+  }
+}
+process.on('uncaughtException', (err) => logMainCrash('uncaughtException', err))
+process.on('unhandledRejection', (reason) => logMainCrash('unhandledRejection', reason))
 
 // Route macOS hardware media keys (F7/F8/F9) to the renderer's MediaSession action
 // handlers instead of letting the system swallow them. Must be set before app ready.
@@ -111,6 +131,8 @@ function createMiniWindow(): void {
       nodeIntegration: false
     }
   })
+  // Never open external content in-app (parity with the main window).
+  miniWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   miniWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   const miniUrl = DEV_URL ? `${DEV_URL}#mini` : 'app://localhost/index.html#mini'
   void miniWindow.loadURL(miniUrl)

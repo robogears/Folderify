@@ -17,6 +17,11 @@ exports.default = async function afterPack(context) {
   } catch {
     /* ignore */
   }
+  // NOTE: `--deep` is deprecated by Apple for *signing* (it signs nested code with the
+  // outer options rather than each item's own identifier/entitlements) and MUST be
+  // dropped before any Developer ID + notarized build — electron-builder signs
+  // inside-out natively once `mac.identity` is a real identity. It is intentional here
+  // ONLY because this is an ad-hoc (`--sign -`), un-notarized build.
   execSync(`codesign --force --deep --sign - ${q}`, { stdio: 'inherit' })
   console.log(`[after-pack] ad-hoc signed ${appName}`)
 }

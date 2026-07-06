@@ -154,12 +154,17 @@ export class ListenPeerConn {
   private waitForDrain(): Promise<void> {
     return new Promise((resolve) => {
       const dc = this.dc
-      if (!dc) return resolve()
-      const onLow = (): void => {
-        dc.removeEventListener('bufferedamountlow', onLow)
+      // Already gone/closed → resolve now; sendBytes re-checks readyState after us.
+      if (!dc || dc.readyState !== 'open') return resolve()
+      // Resolve on drain OR channel close — otherwise a peer that disconnects while the
+      // buffer is full leaves this promise (and the source's stream loop) hung forever.
+      const done = (): void => {
+        dc.removeEventListener('bufferedamountlow', done)
+        dc.removeEventListener('close', done)
         resolve()
       }
-      dc.addEventListener('bufferedamountlow', onLow)
+      dc.addEventListener('bufferedamountlow', done)
+      dc.addEventListener('close', done)
     })
   }
 

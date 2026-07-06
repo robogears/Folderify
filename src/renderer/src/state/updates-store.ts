@@ -19,6 +19,7 @@ interface UpdatesState {
   downloadState: DownloadState
   progressPct: number
   indeterminate: boolean // true while downloading with no known content-length
+  downloadError: string | null // specific reason for the last failed download
   checkState: CheckState
   retryAfterSeconds: number // live countdown while rate-limited
   init: () => void
@@ -108,6 +109,7 @@ export const useUpdates = create<UpdatesState>((set, get) => {
     downloadState: 'idle',
     progressPct: 0,
     indeterminate: false,
+    downloadError: null,
     checkState: 'idle',
     retryAfterSeconds: 0,
 
@@ -170,12 +172,19 @@ export const useUpdates = create<UpdatesState>((set, get) => {
         void window.api.openExternal(a.releaseUrl).catch(() => {})
         return
       }
-      set({ downloadState: 'downloading', progressPct: 0, indeterminate: false })
+      set({ downloadState: 'downloading', progressPct: 0, indeterminate: false, downloadError: null })
       try {
         const r = await window.api.downloadUpdate()
-        set({ downloadState: r.ok ? 'ready' : 'failed', indeterminate: false })
+        // Keep the specific reason (checksum mismatch / disk-full / not-writable) so the
+        // UI can distinguish them — collapsing everything to "retry" hides a tampered
+        // download and sends the user into a futile loop.
+        set({
+          downloadState: r.ok ? 'ready' : 'failed',
+          downloadError: r.ok ? null : (r.error ?? null),
+          indeterminate: false
+        })
       } catch {
-        set({ downloadState: 'failed', indeterminate: false })
+        set({ downloadState: 'failed', downloadError: null, indeterminate: false })
       }
     },
 

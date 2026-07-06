@@ -297,17 +297,42 @@ export const usePlayer = create<PlayerState>((set, get) => {
   }
 })
 
+// Count consecutive engine load/decode failures so a queue of unreadable-but-not-
+// flagged files (online-only iCloud/Dropbox tracks) can't loop forever on repeat:'all'
+// or die silently — after a full pass of failures we stop and tell the user. Reset on
+// any successful play.
+let consecutiveErrors = 0
+
 // Bridge engine events into the store, and apply the persisted volume.
 engine.setHandlers({
   onTime: (t) => usePlayer.setState({ currentTime: t }),
   onDuration: (d) => usePlayer.setState({ duration: d }),
-  onPlay: () => usePlayer.setState({ isPlaying: true }),
+  onPlay: () => {
+    consecutiveErrors = 0
+    usePlayer.setState({ isPlaying: true })
+  },
   onPause: () => {
     usePlayer.setState({ isPlaying: false })
     saveLast(usePlayer.getState().currentTrackId, engine.currentTime)
   },
   onEnded: () => usePlayer.getState()._onEnded(),
-  onError: () => usePlayer.getState().next(true)
+  onError: () => {
+    const st = usePlayer.getState()
+    if (st.remote) return // the source drives remote playback; not our queue
+    consecutiveErrors++
+    // Once we've failed on as many tracks in a row as the queue holds (min 3), every
+    // reachable track has failed — stop instead of fluttering/looping, and say why.
+    if (consecutiveErrors >= Math.max(st.queue.length, 3)) {
+      consecutiveErrors = 0
+      engine.pause()
+      usePlayer.setState({ isPlaying: false })
+      useNotice
+        .getState()
+        .show("Couldn't play these tracks — the files may not be downloaded yet.")
+      return
+    }
+    st.next(true)
+  }
 })
 engine.setVolume(initialVolume)
 

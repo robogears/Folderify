@@ -14,8 +14,10 @@ import { engine } from '../audio/engine'
 import { usePlayer } from '../state/player-store'
 import { useLibrary } from '../state/library-store'
 import { useListen } from '../state/listen-store'
+import { useNotice } from '../state/notice-store'
 import { mediaUrl } from '@shared/ipc'
 import type { Track } from '@shared/models'
+import { LISTEN_MAX_TRANSFER } from '@shared/listen'
 import type { ControlMsg, ListenPeer, RemoteTrackMeta, SignalPayload } from '@shared/listen'
 import { ListenPeerConn } from './peer'
 
@@ -35,8 +37,13 @@ let clockOffset = 0 // estimated (sourceClock - myClock) in ms
 let pingTimer: number | undefined
 let stateTimer: number | undefined
 let connectTimer: number | undefined
+let rxStallTimer: number | undefined
 let prevTrackId: string | null = null
 let prevPlaying = false
+
+// Abandon an in-progress receive if no bytes arrive for this long (source died /
+// unreadable file). Reset on every chunk, so it fires on a STALL, not on total size.
+const RX_STALL_MS = 20000
 
 interface RxState {
   transferId: number
@@ -114,6 +121,8 @@ function pinErrorText(reason: string): string {
       return "The other Mac didn't respond. Make sure Listen Together is open there."
     case 'busy':
       return 'That Mac is already in a listening session.'
+    case 'locked':
+      return 'Too many wrong codes — pairing is locked. Close and reopen Listen Together to try again.'
     case 'peer-gone':
       return 'That device is no longer nearby.'
     default:
@@ -217,10 +226,16 @@ async function becomeSourceFor(track: Track, position: number, playing: boolean)
   }
   console.info('[listen] sourcing track to peer:', track.title, `(${track.size} bytes)`)
   peer.send({ t: 'load', transferId, size: track.size, meta, position, playing })
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
   try {
     const res = await fetch(mediaUrl(track.path))
-    if (!res.ok || !res.body) return
-    const reader = res.body.getReader()
+    if (!res.ok || !res.body) {
+      // Unreadable file (e.g. an online-only cloud file on this Mac). Tell the peer
+      // so it can clear its "loading" state instead of hanging on the track title.
+      if (currentTransferId === transferId) peer.send({ t: 'load-failed', transferId })
+      return
+    }
+    reader = res.body.getReader()
     for (;;) {
       const { done, value } = await reader.read()
       if (done) break
@@ -233,6 +248,15 @@ async function becomeSourceFor(track: Track, position: number, playing: boolean)
     }
   } catch (err) {
     console.error('[listen] stream error:', err)
+    if (currentTransferId === transferId) peer.send({ t: 'load-failed', transferId })
+  } finally {
+    // Cancel the reader on EVERY exit (done, supersession, teardown, error) so the
+    // underlying media:// fs.createReadStream in main is released promptly, not at GC.
+    try {
+      await reader?.cancel()
+    } catch {
+      /* ignore */
+    }
   }
 }
 
@@ -292,6 +316,13 @@ function handleControl(m: ControlMsg): void {
     case 'loaded':
       finalizeReceive(m.transferId)
       break
+    case 'load-failed':
+      if (rx && rx.transferId === m.transferId) {
+        clearRxStall()
+        rx = null
+        useNotice.getState().show('The other Mac couldn’t send that track.')
+      }
+      break
     case 'state':
       applyRemoteState(m)
       break
@@ -305,6 +336,14 @@ function handleControl(m: ControlMsg): void {
 }
 
 function beginReceive(m: Extract<ControlMsg, { t: 'load' }>): void {
+  clearRxStall()
+  // Validate the peer-declared size — a malicious/buggy peer could send a huge or
+  // nonsensical size to exhaust renderer memory (the whole file buffers before play).
+  if (!Number.isFinite(m.size) || m.size < 0 || m.size > LISTEN_MAX_TRANSFER) {
+    rx = null
+    useNotice.getState().show('Skipped a track that was too large to stream.')
+    return
+  }
   rx = {
     transferId: m.transferId,
     size: m.size,
@@ -315,17 +354,29 @@ function beginReceive(m: Extract<ControlMsg, { t: 'load' }>): void {
     received: 0,
     done: false
   }
+  armRxStall()
 }
 
 function handleBytes(buf: ArrayBuffer): void {
   if (!rx || rx.done) return
   rx.chunks.push(new Uint8Array(buf))
   rx.received += buf.byteLength
-  if (rx.received >= rx.size) finalizeReceive(rx.transferId)
+  // A peer must never exceed the size it declared — abort if it overruns.
+  if (rx.received > rx.size) {
+    clearRxStall()
+    rx = null
+    return
+  }
+  if (rx.received === rx.size) {
+    finalizeReceive(rx.transferId)
+    return
+  }
+  armRxStall() // more to come — keep the stall watchdog alive
 }
 
 function finalizeReceive(transferId: number): void {
   if (!rx || rx.transferId !== transferId || rx.done) return
+  clearRxStall()
   rx.done = true
   console.info('[listen] received track:', rx.meta.title, `(${rx.received} bytes) → playing`)
   const blob = new Blob(rx.chunks as BlobPart[], { type: mimeFor(rx.meta.ext) })
@@ -382,8 +433,24 @@ function stopTimers(): void {
   connectTimer = undefined
 }
 
+// Receiver-side stall watchdog: abandon an in-progress transfer if bytes stop arriving.
+function armRxStall(): void {
+  clearRxStall()
+  rxStallTimer = window.setTimeout(() => {
+    if (rx && !rx.done) {
+      rx = null
+      useNotice.getState().show('The other Mac stopped sending the track.')
+    }
+  }, RX_STALL_MS)
+}
+function clearRxStall(): void {
+  if (rxStallTimer) window.clearTimeout(rxStallTimer)
+  rxStallTimer = undefined
+}
+
 function teardown(): void {
   stopTimers()
+  clearRxStall()
   clearSim()
   try {
     peer?.close()

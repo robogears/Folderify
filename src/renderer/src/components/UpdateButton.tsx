@@ -1,6 +1,16 @@
 import type { JSX } from 'react'
 import { useUpdates } from '../state/updates-store'
 
+/** A concise label for a failed download — a checksum mismatch (corruption/tamper),
+ *  disk-full, and not-writable are each user-actionable and shouldn't collapse to a
+ *  generic "retry". */
+function failLabel(err: string | null): string {
+  if (err && /checksum/i.test(err)) return 'Update corrupted — retry'
+  if (err && /disk space/i.test(err)) return 'Not enough disk space'
+  if (err && /not writable|move the app/i.test(err)) return 'Move app to update'
+  return 'Download failed — retry'
+}
+
 /** The update state-machine button, shared by the top-bar pill and Settings. Renders
  *  null unless there's an update to act on (offline / rate-limited feedback lives in
  *  the Settings "Check for updates" row instead, so the top bar stays clean). */
@@ -10,6 +20,7 @@ export function UpdateButton({ className = '' }: { className?: string }): JSX.El
   const state = useUpdates((s) => s.downloadState)
   const pct = useUpdates((s) => s.progressPct)
   const indeterminate = useUpdates((s) => s.indeterminate)
+  const downloadError = useUpdates((s) => s.downloadError)
   const startDownload = useUpdates((s) => s.startDownload)
   const apply = useUpdates((s) => s.apply)
 
@@ -41,7 +52,7 @@ export function UpdateButton({ className = '' }: { className?: string }): JSX.El
     onClick = () => {}
     disabled = true
   } else if (state === 'failed') {
-    label = 'Download failed — retry'
+    label = failLabel(downloadError)
     onClick = () => void startDownload()
   } else {
     label = `Update to v${available.version}`
@@ -53,6 +64,7 @@ export function UpdateButton({ className = '' }: { className?: string }): JSX.El
       className={`update-btn ${ready ? 'is-ready' : ''} ${className}`}
       onClick={onClick}
       disabled={disabled}
+      title={state === 'failed' && downloadError ? downloadError : undefined}
     >
       {label}
     </button>

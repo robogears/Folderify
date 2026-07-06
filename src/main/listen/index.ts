@@ -108,7 +108,12 @@ export function registerListen(getWindow: () => BrowserWindow | null): () => voi
   ipcMain.handle('listen:connect-manual', async (_e, arg: unknown) => {
     const { host, pin } = (arg ?? {}) as { host?: string; pin?: string }
     const cleanHost = String(host ?? '').trim()
-    if (!cleanHost || !signaling) return { ok: false, error: 'network' }
+    // Only allow characters that appear in a hostname / IPv4 / IPv6 literal — reject
+    // slashes, whitespace, control chars, etc. Listen Together is LAN-only, so the
+    // target is always a plain host, never a URL or path.
+    if (!cleanHost || !signaling || !/^[a-zA-Z0-9._:-]+$/.test(cleanHost)) {
+      return { ok: false, error: 'network' }
+    }
     signaling.connect(
       cleanHost,
       LISTEN_SIG_PORT,

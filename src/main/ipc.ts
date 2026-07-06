@@ -2,6 +2,7 @@ import { ipcMain, shell, type BrowserWindow } from 'electron'
 import { Library } from './library/model'
 import { LibraryWatcher } from './library/watcher'
 import { chooseFolder, saveRoot } from './library/root-store'
+import { safeResolveUnder } from './path-safety'
 
 export interface IpcContext {
   library: Library
@@ -40,6 +41,10 @@ export function registerIpc(ctx: IpcContext): void {
   })
 
   ipcMain.handle('track:reveal', async (_e, path: unknown) => {
-    if (typeof path === 'string' && path) shell.showItemInFolder(path)
+    if (typeof path !== 'string' || !path) return
+    // Confine to the current library root — never reveal an arbitrary absolute path a
+    // (hypothetically compromised) renderer could pass, matching the media:// guard.
+    const root = ctx.library.getRoot()
+    if (root && safeResolveUnder(root, path)) shell.showItemInFolder(path)
   })
 }

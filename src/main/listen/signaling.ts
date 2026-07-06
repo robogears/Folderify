@@ -45,9 +45,15 @@ function writeLine(sock: net.Socket, obj: unknown): void {
   }
 }
 
+/** Wrong-PIN attempts allowed per session before pairing locks. A 6-digit PIN has no
+ *  brute-force resistance on its own; capping attempts is what makes it safe on a LAN. */
+const MAX_PIN_FAILURES = 5
+
 export class Signaling {
   private server?: net.Server
   private active?: net.Socket
+  private pinFailures = 0
+  private locked = false
   port = 0
 
   constructor(private opts: SignalingOpts) {}
@@ -78,6 +84,13 @@ export class Signaling {
   // --- Callee side: a peer connected to us and must present the right PIN. ---
   private handleIncoming(sock: net.Socket): void {
     sock.on('error', () => {})
+    // Too many wrong PINs this session → refuse all further attempts. The attacker
+    // can't keep guessing; the user re-opens the panel to get a fresh PIN.
+    if (this.locked) {
+      writeLine(sock, { t: 'reject', reason: 'locked' })
+      sock.end()
+      return
+    }
     if (this.active) {
       writeLine(sock, { t: 'reject', reason: 'busy' })
       sock.end()
@@ -89,7 +102,12 @@ export class Signaling {
         if (m.t !== 'hello') return
         helloSeen = true
         if (String(m.pin) !== this.opts.getPin()) {
-          writeLine(sock, { t: 'reject', reason: 'pin' })
+          this.pinFailures++
+          if (this.pinFailures >= MAX_PIN_FAILURES) {
+            this.locked = true
+            this.opts.onError('locked')
+          }
+          writeLine(sock, { t: 'reject', reason: this.locked ? 'locked' : 'pin' })
           sock.end()
           return
         }

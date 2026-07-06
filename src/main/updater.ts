@@ -596,6 +596,13 @@ function mountAndExtractMacDmg(dmgPath: string): Promise<string> {
         detach()
         return reject(new Error('No .app in DMG'))
       }
+      // Pin the extracted bundle name to our product. The staged path is later
+      // interpolated into the relauncher bash script; a dmg whose .app is named with
+      // shell metacharacters must never reach it (defense in depth atop the SHA gate).
+      if (appName !== `${app.getName()}.app`) {
+        detach()
+        return reject(new Error(`Unexpected .app in DMG: ${appName}`))
+      }
       const sourceApp = path.join(mountPoint, appName)
       const destApp = path.join(stagingDir, appName)
       const cp = spawn('ditto', [sourceApp, destApp], { stdio: 'ignore' })
@@ -899,15 +906,19 @@ export function registerUpdater(getWindow: () => BrowserWindow | null): {
       // SHA-256 gate BEFORE staging. Missing sidecar (old release) → warn + proceed
       // on the TLS floor.
       if (av.sha256Url) {
+        // The release advertises a sidecar → the checksum gate is mandatory. Fail CLOSED
+        // if we can't fetch/parse it: a present-but-unreadable digest is exactly what an
+        // attacker who dropped the sidecar (to force a skip) would produce. (Pre-contract
+        // releases have NO sha256Url at all and take the lenient path below.)
         const expected = await fetchExpectedSha(av.sha256Url)
-        if (expected) {
-          const actual = await sha256File(destPath)
-          if (actual !== expected) {
-            await fs.unlink(destPath).catch(() => {})
-            return { ok: false, error: 'Checksum mismatch — download corrupted or tampered' }
-          }
-        } else {
-          console.warn('[updater] .sha256 asset present but unreadable; skipping verify')
+        if (!expected) {
+          await fs.unlink(destPath).catch(() => {})
+          return { ok: false, error: 'Checksum unavailable — could not verify the download' }
+        }
+        const actual = await sha256File(destPath)
+        if (actual !== expected) {
+          await fs.unlink(destPath).catch(() => {})
+          return { ok: false, error: 'Checksum mismatch — download corrupted or tampered' }
         }
       } else {
         console.warn('[updater] no .sha256 asset for this release; skipping checksum verify')

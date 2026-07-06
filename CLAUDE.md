@@ -38,8 +38,9 @@ lockstep — bump all three when releasing).
   `ignoreInitial`, `followSymlinks: false`, `awaitWriteFinish {1500ms, poll 100ms}`; dot-files
   skipped.
 - **Startup order** (`app.whenReady`): CSP hook → thumbs dir → cache load → watcher created →
-  protocol handlers → IPC → updater → main window + mini window + tray → player relay → 2.5s
-  delayed silent update check → restore root (`loadRoot() ?? FOLDERIFY_DEFAULT_ROOT`) → rebuild.
+  protocol handlers → IPC → updater (registered; the **renderer** runs the first check itself) →
+  listen module → main window + mini window + tray → player relay → restore root
+  (`loadRoot() ?? FOLDERIFY_DEFAULT_ROOT`) → rebuild.
 
 ---
 
@@ -125,8 +126,10 @@ URL helpers live in `src/shared/ipc.ts`: `mediaUrl(absPath)`, `coverUrl(trackId,
   `library:changed` (`FsDelta`), `library:scan-progress` (`ScanProgress`).
 
 **Updater** (handled in `src/main/updater.ts`; NOT in the typed maps — wired as raw strings):
-- invoke: `app:version`, `update:check`, `update:can-self-install` (darwin + packaged only),
-  `update:download`, `update:apply`, `shell:open-external` (http/https URLs only).
+- invoke: `app:version`, `update:check`, `update:get-pending` (replays the last `available`),
+  `update:can-self-install` (darwin + packaged only), `update:download` (**no args** — main
+  downloads its own last-checked asset+sidecar pair), `update:apply`, `shell:open-external`
+  (http/https URLs only).
 - push: `update:available`, `update:download-progress`.
 
 **Mini-player relay** (fire-and-forget `ipcRenderer.send`, relayed window↔window in
@@ -139,23 +142,40 @@ except `{type:'showApp'}` which main handles itself (hide popover, focus main wi
 
 ### In-app updater (`src/main/updater.ts`)
 
-- **Check**: `node:https` GET `api.github.com/repos/robogears/Folderify/releases/latest` (10s
-  timeout; all failures → `status:'error'`). Version compare strips `v` and compares numeric
-  segments. Asset match: prefer a `.dmg` containing `-${process.arch}.dmg`, fall back to any
-  `.dmg`, then to the release page URL. Silent check 2.5s after launch pushes `update:available`.
-- **Download/stage**: refuses unless self-installable (darwin + packaged). Streams the dmg to
-  tmp (5 redirects max, 60s socket timeout, progress events), `hdiutil attach -nobrowse`, finds
-  the first `.app`, `ditto` copies it out (preserves xattrs/signature), detaches, deletes the dmg.
-- **Apply**: derives the running bundle from the exe path. **App Translocation guard** — if the
-  path contains `/AppTranslocation/`, install to `/Applications/<name>` instead. Writes a
-  self-deleting bash script that **double-forks** (`nohup` + `disown` + `--daemonized` re-exec) so
-  it survives app exit; logs to `~/Library/Logs/Folderify/update-<ts>.log`; waits ≤30s for the PID
-  to exit; strips quarantine (`xattr -dr`); moves old app to `.bak`; moves the new app in;
-  **re-signs ad-hoc**; relaunches via `open`; rolls back `.bak` on failure. App quits itself 500ms
-  after spawning the script.
-- The updater depends on the release asset naming contract `Folderify-<version>-arm64.dmg` — don't
-  change `artifactName` in electron-builder.yml without keeping the matcher in sync. Drafts are
-  invisible to `releases/latest`; users only see the update once the release is published.
+Hardened GitHub-Releases recipe (github-updater skill). NOT `node:https` — everything below.
+
+- **Transport**: Electron `net` (system proxy + OS cert store), **host-pinned** to api.github.com /
+  github.com / `*.githubusercontent.com`, re-validated on **every redirect hop**. http + the
+  `UPDATER_API_BASE` override exist only behind `overridesAllowed()` (dev build, or an explicit
+  `UPDATER_ALLOW_INSECURE_OVERRIDE=1` for the updater-e2e-harness) — dead in a shipped build.
+- **Check**: GET `.../releases/latest` with an **ETag** cache persisted to
+  `userData/updater-check-cache.json`; a `304` reuses the cached release at zero of the shared
+  60/hr quota. Typed outcomes: 404 → `no-releases`, 403/429 → `rate-limited` (retry seconds),
+  offline → `offline`, else `up-to-date`/`available`. Version compare strips `v`
+  case-insensitively, is prerelease-aware, ignores garbage tags. Asset match: `-${process.arch}.dmg`
+  then `-universal.dmg`, else `available` with **no** `downloadUrl` (`reason:'no-asset-for-arch'` →
+  UI routes to the release page; there is **no** wrong-arch fallback). The **renderer** drives the
+  launch check (silent `check()` + `update:get-pending` replay — no launch setTimeout); main arms a
+  12h timer + `powerMonitor` wake re-check and a `stop()` teardown.
+- **Download/stage**: refuses unless self-installable (darwin + packaged); `update:download` takes
+  **no URL** (main uses its own `{downloadUrl, sha256Url}` pair, closing a renderer-supplied-URL
+  hole + race). Streams to `*.part` → rename on success; disk-space + install-writability
+  preflights; stall timer; re-entrancy guard; startup temp sweep. **SHA-256 sidecar verified before
+  staging** — a mismatch, or (when a sidecar is advertised) an unfetchable digest, **fails closed**;
+  a release with no sidecar at all proceeds on the TLS floor with a warning. Then `hdiutil attach
+  -nobrowse` → `ditto` the `.app` out → detach → delete the dmg.
+- **Apply**: derives the running bundle from the exe path. **App Translocation guard** — if the path
+  contains `/AppTranslocation/`, install to `/Applications/<name>` instead. Writes a self-deleting
+  bash script that **double-forks** (`nohup` + `disown` + `--daemonized` re-exec) so it survives app
+  exit; logs to `~/Library/Logs/Folderify/update-<ts>.log`; waits ≤30s for the PID (aborts + reopens
+  the old app if it never exits); strips quarantine (`xattr -dr`); moves old app to `.bak`; moves
+  the new app in; **re-signs ad-hoc AND verifies** (rolls back to `.bak` on a failed re-sign);
+  reopens the old app if even the backup step fails. App quits itself 500ms after spawning the
+  script.
+- The updater depends on the release asset naming contract `Folderify-<version>-arm64.dmg` **plus a
+  `Folderify-<version>-arm64.dmg.sha256` sidecar** — don't change `artifactName` in
+  electron-builder.yml (or drop the CI checksum step) without keeping the matcher in sync. Drafts
+  are invisible to `releases/latest`; users only see the update once the release is published.
 
 ---
 
@@ -169,7 +189,7 @@ src/
                            LOOSE_PLAYLIST_ID/NAME
     ipc.ts                 IpcInvokeMap, IpcEventMap (library channels only), PROTOCOL,
                            mediaUrl(), coverUrl()
-    api.ts                 FolderifyApi — the full 20-member window.api surface
+    api.ts                 FolderifyApi — the full 22-member window.api surface (incl. listen.*)
     audio-extensions.ts    AUDIO_EXT (24 exts), UNSUPPORTED_EXT, isAudioFile()
   main/
     index.ts               lifecycle, windows (main/mini), tray, CSP, rebuild queue, player relay
@@ -334,15 +354,16 @@ Local packaged builds are **ad-hoc signed** (see Shipping) and open normally. Th
 `mac.identity: null` (skips electron-builder's signing), `afterPack: build/after-pack.js` which
 `xattr -cr`s then **ad-hoc signs** (`codesign --force --deep --sign -`) — a fully-unsigned app is
 rejected by Apple Silicon Gatekeeper as "damaged"; ad-hoc needs no Developer ID. Single **arm64**
-dmg; `artifactName: ${productName}-${version}-${arch}.${ext}` → `Folderify-0.1.5-arm64.dmg`
-(**the updater's asset matcher depends on this name pattern**). `extendInfo` carries
-Music/Documents/Downloads folder usage strings.
+dmg; `artifactName: ${productName}-${version}-${arch}.${ext}` → `Folderify-<version>-arm64.dmg`
+(**the updater's asset matcher depends on this name pattern**). `extendInfo` carries the
+Music/Documents/Downloads folder + `NSLocalNetworkUsageDescription` (Listen Together) usage strings.
 
-**CI** (`.github/workflows/release.yml`, macos-14 + Node 22): on tag push `v*` → npm ci → build →
-`electron-builder --mac --publish never` (`CSC_IDENTITY_AUTODISCOVERY=false`) → always upload
-dmg+blockmap as CI artifacts → **only on tags** create a **draft** GitHub release named after the
-tag with `body_path: RELEASE_NOTES.md`. Manual `workflow_dispatch` produces test artifacts without
-cutting a release.
+**CI** (`.github/workflows/release.yml`, macos-14 + Node 22; **all actions pinned to commit SHAs**):
+on tag push `v*` → npm ci → build → `electron-builder --mac --publish never`
+(`CSC_IDENTITY_AUTODISCOVERY=false`) → **`shasum -a 256` each dmg → `<dmg>.sha256` sidecar** (the
+updater's SHA-256 gate depends on this step) → upload the dmg as a CI artifact → **only on tags**
+create a **draft** GitHub release (dmg + `.sha256`) named after the tag with `body_path:
+RELEASE_NOTES.md`. Manual `workflow_dispatch` produces test artifacts without cutting a release.
 
 **Release checklist** (all three versions in lockstep):
 1. Bump `package.json` version, `npm install --package-lock-only`, bump iOS `MARKETING_VERSION`
@@ -361,10 +382,11 @@ cutting a release.
 `~/Library/Application Support/Folderify/` (macOS is case-insensitive, so `folderify`==`Folderify`):
 - `folderify-config.json` — the saved root folder (re-stat'd on load; nulled if missing)
 - `folderify-cache.json` — metadata cache (path → mtime/size/tags, versioned)
+- `updater-check-cache.json` — updater ETag + last release JSON (304-conditional checks)
 - `thumbs/` — generated album-art thumbnails (`<id>_<sm|lg>.jpg`)
 - `Local Storage/` (Chromium) — `folderify.settings`, `folderify.volume`, `folderify.lastplayed`
 
-Updater logs: `~/Library/Logs/Folderify/update-<ts>.log` (+ `attempts.log`).
+Updater logs: `~/Library/Logs/Folderify/update-<ts>.log` (+ `attempts.log`, `main-crash.log`).
 
 Reset via the in-app folder menu → **Disconnect folder** (partial — see gotchas), or delete the
 whole directory (full).

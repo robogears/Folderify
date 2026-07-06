@@ -50,6 +50,7 @@ export type ControlMsg =
       playing: boolean
     }
   | { t: 'loaded'; transferId: number }
+  | { t: 'load-failed'; transferId: number }
   | { t: 'state'; playing: boolean; position: number; atClock: number; transferId: number }
   | { t: 'command'; cmd: 'play' | 'pause' | 'seek'; value?: number }
   | { t: 'bye' }
@@ -62,6 +63,10 @@ export const LISTEN_MULTICAST_PORT = 50777
 export const LISTEN_SIG_PORT = 50778
 /** Max bytes per data-channel binary send (SCTP-safe portable chunk size). */
 export const LISTEN_CHUNK_SIZE = 16 * 1024
+/** Hard ceiling on a single streamed track (the whole file buffers in renderer memory
+ *  before playback). Larger than any real audio file; caps a malicious/buggy peer that
+ *  declares a huge `size` and streams forever. 1 GiB. */
+export const LISTEN_MAX_TRANSFER = 1024 * 1024 * 1024
 
 /** Identity + reachability returned when advertising starts. */
 export interface ListenIdentity {
