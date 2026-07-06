@@ -53,6 +53,7 @@ const api: FolderifyApi = {
       ipcRenderer.invoke('listen:connect-manual', { host, pin }),
     disconnect: () => ipcRenderer.invoke('listen:disconnect'),
     sendSignal: (payload: SignalPayload) => ipcRenderer.send('listen:signal', payload),
+    readTrack: (path: string) => ipcRenderer.invoke('listen:read-track', path),
     onPeers: (cb: (peers: ListenPeer[]) => void) => subscribe('listen:peers', cb),
     onConnected: (cb: (c: ListenConnected) => void) => subscribe('listen:connected', cb),
     onSignal: (cb: (p: SignalPayload) => void) => subscribe('listen:signal', cb),

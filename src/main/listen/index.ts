@@ -5,10 +5,12 @@
 
 import { ipcMain, type BrowserWindow } from 'electron'
 import { randomUUID } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
 import os from 'node:os'
 import { Discovery } from './discovery'
 import { Signaling } from './signaling'
-import { LISTEN_SIG_PORT } from '../../shared/listen'
+import { safeResolveUnder } from '../path-safety'
+import { LISTEN_MAX_TRANSFER, LISTEN_SIG_PORT } from '../../shared/listen'
 
 interface Identity {
   id: string
@@ -36,11 +38,32 @@ function localAddresses(): string[] {
   return out
 }
 
-export function registerListen(getWindow: () => BrowserWindow | null): () => void {
+export function registerListen(
+  getWindow: () => BrowserWindow | null,
+  getRoot: () => string | null
+): () => void {
   function send(channel: string, payload: unknown): void {
     const w = getWindow()
     if (w && !w.isDestroyed()) w.webContents.send(channel, payload)
   }
+
+  // Read the bytes of a track for the source to stream to its peer. Main owns disk
+  // access, so this avoids the renderer fetch('media://…') cross-scheme path that
+  // failed in the field. Path is confined to the library root, same as media://.
+  ipcMain.handle('listen:read-track', async (_e, p: unknown) => {
+    const root = getRoot()
+    if (!root || typeof p !== 'string' || !p) return null
+    const safe = safeResolveUnder(root, p)
+    if (!safe) return null
+    try {
+      const buf = await readFile(safe)
+      if (buf.byteLength > LISTEN_MAX_TRANSFER) return null
+      // Return a standalone ArrayBuffer (Buffer's may be a shared pool slice).
+      return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
+    } catch {
+      return null
+    }
+  })
 
   let discovery: Discovery | undefined
   let signaling: Signaling | undefined

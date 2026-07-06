@@ -596,12 +596,15 @@ function mountAndExtractMacDmg(dmgPath: string): Promise<string> {
         detach()
         return reject(new Error('No .app in DMG'))
       }
-      // Pin the extracted bundle name to our product. The staged path is later
-      // interpolated into the relauncher bash script; a dmg whose .app is named with
-      // shell metacharacters must never reach it (defense in depth atop the SHA gate).
-      if (appName !== `${app.getName()}.app`) {
+      // The staged path is later interpolated into the relauncher bash script, so reject
+      // any bundle whose name carries shell metacharacters. Do NOT require an exact
+      // product-name match: app.getName() returns the lowercase package name
+      // ("folderify") while the real bundle is "Folderify.app", so an == check wrongly
+      // rejected every legit update. A safe-character allowlist closes the injection
+      // vector without depending on that mismatch.
+      if (!/^[\w .-]+\.app$/.test(appName)) {
         detach()
-        return reject(new Error(`Unexpected .app in DMG: ${appName}`))
+        return reject(new Error(`Unsafe .app name in DMG: ${appName}`))
       }
       const sourceApp = path.join(mountPoint, appName)
       const destApp = path.join(stagingDir, appName)

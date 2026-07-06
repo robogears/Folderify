@@ -26,6 +26,8 @@ export interface FolderifyListenApi {
   disconnect(): Promise<{ ok: boolean }>
   /** Send a WebRTC SDP/ICE payload to the connected peer (relayed by main). */
   sendSignal(payload: SignalPayload): void
+  /** Read a track's bytes (confined to the library root) for the source to stream. */
+  readTrack(path: string): Promise<ArrayBuffer | null>
   onPeers(cb: (peers: ListenPeer[]) => void): Unsubscribe
   onConnected(cb: (c: ListenConnected) => void): Unsubscribe
   onSignal(cb: (payload: SignalPayload) => void): Unsubscribe

@@ -15,7 +15,6 @@ import { usePlayer } from '../state/player-store'
 import { useLibrary } from '../state/library-store'
 import { useListen } from '../state/listen-store'
 import { useNotice } from '../state/notice-store'
-import { mediaUrl } from '@shared/ipc'
 import type { Track } from '@shared/models'
 import { LISTEN_MAX_TRANSFER } from '@shared/listen'
 import type {
@@ -238,22 +237,19 @@ async function becomeSourceFor(track: Track, position: number, playing: boolean)
   }
   console.info('[listen] sourcing track to peer:', track.title, `(${track.size} bytes)`)
   peer.send({ t: 'load', transferId, size: track.size, meta, position, playing })
-  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
   try {
-    const res = await fetch(mediaUrl(track.path))
-    if (!res.ok || !res.body) {
-      // Unreadable file (e.g. an online-only cloud file on this Mac). Tell the peer
-      // so it can clear its "loading" state instead of hanging on the track title.
-      if (currentTransferId === transferId) peer.send({ t: 'load-failed', transferId })
+    // Read via MAIN (direct fs), not a renderer fetch('media://…') — the cross-scheme
+    // fetch failed in the field ("couldn't send that track"). Main confines the path
+    // to the library root.
+    const bytes = await window.api.listen.readTrack(track.path)
+    if (currentTransferId !== transferId) return // superseded by a newer track
+    if (!bytes) {
+      // Unreadable (missing / online-only cloud file). Tell the peer so it clears its
+      // "loading" state instead of hanging on the track title.
+      peer.send({ t: 'load-failed', transferId })
       return
     }
-    reader = res.body.getReader()
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-      if (currentTransferId !== transferId) return // superseded by a newer track
-      if (value) await peer.sendBytes(value)
-    }
+    await peer.sendBytes(new Uint8Array(bytes))
     if (currentTransferId === transferId) {
       peer.send({ t: 'loaded', transferId })
       sendState()
@@ -261,14 +257,6 @@ async function becomeSourceFor(track: Track, position: number, playing: boolean)
   } catch (err) {
     console.error('[listen] stream error:', err)
     if (currentTransferId === transferId) peer.send({ t: 'load-failed', transferId })
-  } finally {
-    // Cancel the reader on EVERY exit (done, supersession, teardown, error) so the
-    // underlying media:// fs.createReadStream in main is released promptly, not at GC.
-    try {
-      await reader?.cancel()
-    } catch {
-      /* ignore */
-    }
   }
 }
 

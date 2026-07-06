@@ -255,7 +255,7 @@ app.whenReady().then(async () => {
   })
   const updater = registerUpdater(() => mainWindow)
   stopUpdater = updater.stop
-  teardownListen = registerListen(() => mainWindow)
+  teardownListen = registerListen(() => mainWindow, () => library.getRoot())
   teardownMediaKeys = registerMediaKeys(() => mainWindow)
 
   createWindow()
