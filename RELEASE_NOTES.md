@@ -1,23 +1,21 @@
-# What's new in v0.1.9
+# What's new in v0.1.10
 
-## More reliable, more secure updates
+## Stability & security hardening
 
-The in-app updater is rebuilt on a hardened path:
+A pass over the whole app tightening reliability and safety:
 
-- **Checksum-verified downloads.** Every update is verified against a SHA-256 published
-  with the release before it's installed — a corrupted or truncated download is caught
-  and rejected instead of installed.
-- **Clearer feedback.** Instead of a generic "couldn't reach GitHub," a manual check now
-  tells you exactly what happened — **"You're offline"**, **"Rate-limited — retry in Ns"**,
-  or **"No releases yet"** — and recovers on its own when you're back online.
-- **Quota-friendly checks** (they won't trip GitHub's rate limit), respect for **system
-  proxies** and the macOS certificate store, and an automatic re-check after your Mac
-  **wakes from sleep**.
-- **Under the hood:** closed a couple of update-path security gaps (the app downloads
-  only its own verified release asset now) and made the install swap safer — it re-signs
-  **and verifies** the new app, and rolls back to the old one on any failure.
+- **Listen Together** is sturdier and safer: pairing now **locks after several wrong
+  codes** (so the 6-digit code can't be guessed), oversized or stalled transfers are
+  rejected instead of hanging or eating memory, and a dropped connection recovers cleanly
+  with a clear message instead of freezing on "Connecting…".
+- **Playing undownloaded files** (iCloud / Dropbox tracks that aren't local yet) now stops
+  with a clear message instead of skipping through the whole folder forever.
+- **Updates** report the *specific* reason when a download fails — corrupted, not enough
+  disk space, or the app can't write to its folder — and an update that advertises a
+  checksum but can't prove it now refuses to install rather than proceeding.
 
-> This hardened updater takes effect for updates **from v0.1.9 onward**.
+Under the hood: crash logging for the main process, hardened "reveal in Finder" and
+mini-player, CI actions pinned to exact versions, and refreshed developer docs.
 
 ---
 
@@ -25,7 +23,7 @@ The in-app updater is rebuilt on a hardened path:
 
 - **Already on v0.1.2 or later?** Just click the in-app **Update** button (top bar or
   Settings → Updates) — it downloads and self-installs. No DMG needed.
-- **Fresh install (macOS, Apple Silicon):** download `Folderify-0.1.9-arm64.dmg`, open
+- **Fresh install (macOS, Apple Silicon):** download `Folderify-0.1.10-arm64.dmg`, open
   it, and drag Folderify to Applications.
 
 On a fresh install, macOS Gatekeeper holds the app back on first launch (it isn't
@@ -41,4 +39,4 @@ Your settings, metadata cache, and thumbnails live in `~/Library/Application Sup
 
 ---
 
-**Full Changelog**: https://github.com/robogears/Folderify/compare/v0.1.8...v0.1.9
+**Full Changelog**: https://github.com/robogears/Folderify/compare/v0.1.9...v0.1.10
