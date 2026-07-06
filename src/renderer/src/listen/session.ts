@@ -18,7 +18,13 @@ import { useNotice } from '../state/notice-store'
 import { mediaUrl } from '@shared/ipc'
 import type { Track } from '@shared/models'
 import { LISTEN_MAX_TRANSFER } from '@shared/listen'
-import type { ControlMsg, ListenPeer, RemoteTrackMeta, SignalPayload } from '@shared/listen'
+import type {
+  ControlMsg,
+  ListenPeer,
+  QueueItem,
+  RemoteTrackMeta,
+  SignalPayload
+} from '@shared/listen'
 import { ListenPeerConn } from './peer'
 
 const hasNative = typeof window !== 'undefined' && !!window.api?.listen
@@ -40,6 +46,9 @@ let connectTimer: number | undefined
 let rxStallTimer: number | undefined
 let prevTrackId: string | null = null
 let prevPlaying = false
+// Whether the peer has tracks in ITS up-next queue (kept fresh via queue-notice).
+let peerHasNext = false
+let prevUpNext: string[] = []
 
 // Abandon an in-progress receive if no bytes arrive for this long (source died /
 // unreadable file). Reset on every chunk, so it fires on a STALL, not on total size.
@@ -200,6 +209,9 @@ function onChannelOpen(): void {
   const s = usePlayer.getState()
   prevTrackId = s.currentTrackId
   prevPlaying = s.isPlaying
+  // Tell the peer what we already have queued (and prime the change detector).
+  prevUpNext = s.upNext
+  if (s.upNext.length > 0) sendQueueNotice(s.upNext)
   const local = localTrack(s.currentTrackId)
   if (local) void becomeSourceFor(local, s.currentTime, s.isPlaying)
 }
@@ -283,8 +295,13 @@ function applyCommandAsSource(m: Extract<ControlMsg, { t: 'command' }>): void {
 }
 
 // React to local playback changes: picking a local track (while connected) makes us
-// the source; a play/pause change re-broadcasts state.
+// the source; a play/pause change re-broadcasts state; an up-next change tells the
+// peer what we have queued (so the shared "Up next" view and the gate stay fresh).
 function onPlayerChange(s: PlayerSnapshot): void {
+  if (connectedPeer && s.upNext !== prevUpNext) {
+    prevUpNext = s.upNext
+    sendQueueNotice(s.upNext)
+  }
   if (!connectedPeer || applyingRemote) {
     prevTrackId = s.currentTrackId
     prevPlaying = s.isPlaying
@@ -297,6 +314,56 @@ function onPlayerChange(s: PlayerSnapshot): void {
   }
   prevTrackId = s.currentTrackId
   prevPlaying = s.isPlaying
+}
+
+// ============================================================ shared queue
+function sendQueueNotice(upNext: string[]): void {
+  const lib = useLibrary.getState()
+  const items: QueueItem[] = upNext.slice(0, 50).flatMap((id) => {
+    const t = lib.tracksById.get(id)
+    return t ? [{ title: t.title, artist: t.artist }] : []
+  })
+  peer?.send({ t: 'queue-notice', items } satisfies ControlMsg)
+}
+
+function applyQueueNotice(m: Extract<ControlMsg, { t: 'queue-notice' }>): void {
+  // Peer data — validate shape and cap sizes before it touches state/UI.
+  const items = Array.isArray(m.items)
+    ? m.items.slice(0, 50).map((it) => ({
+        title: String(it?.title ?? '').slice(0, 200),
+        artist: String(it?.artist ?? '').slice(0, 200)
+      }))
+    : []
+  peerHasNext = items.length > 0
+  useListen.setState({ peerQueue: items })
+}
+
+/**
+ * Consulted by player-store's next(auto) while connected — decides whose queued
+ * track takes the next slot. Precedence: the SOURCE's own queue wins; the receiver's
+ * queue takes the slot only when the source has nothing queued. Both engines end at
+ * ~the same moment (both play local copies in lockstep), so each side deciding from
+ * the same shared state keeps them from grabbing the slot simultaneously.
+ * Returns true when the session consumed the advance.
+ */
+function queueGate(): boolean {
+  if (!connectedPeer) return false
+  const st = usePlayer.getState()
+  if (st.remote) {
+    // Receiver: take the slot with our queued track only if the source has none —
+    // returning false lets the store's upNext logic play it (→ handoff streams it).
+    return !(st.upNext.length > 0 && !peerHasNext)
+  }
+  // Source side: a takeover stream already incoming → never start a competing one.
+  if (rx && !rx.done) return true
+  if (st.upNext.length > 0) return false // our own queue wins — store plays it
+  if (peerHasNext) {
+    // Peer's queued track takes the slot: hold here; their engine ends in lockstep
+    // and they stream it to us via the normal handoff.
+    console.info('[listen] holding auto-advance — peer has the next track queued')
+    return true
+  }
+  return false
 }
 
 // ============================================================ receiver side
@@ -328,6 +395,9 @@ function handleControl(m: ControlMsg): void {
       break
     case 'command':
       applyCommandAsSource(m)
+      break
+    case 'queue-notice':
+      applyQueueNotice(m)
       break
     case 'bye':
       teardown()
@@ -468,6 +538,7 @@ function teardown(): void {
   rx = null
   clockOffset = 0
   currentTransferId = 0
+  peerHasNext = false
 
   applyingRemote = true
   if (wasReceiver) {
@@ -486,7 +557,7 @@ function teardown(): void {
   }
   applyingRemote = false
 
-  useListen.setState({ status: 'idle', peer: null, role: null })
+  useListen.setState({ status: 'idle', peer: null, role: null, peerQueue: [] })
 }
 
 // ============================================================ simulation fallback
@@ -580,3 +651,5 @@ export function disconnect(): void {
 // Detect local playback to drive the source side. Registered once at module load;
 // no-ops until a session is connected.
 usePlayer.subscribe(onPlayerChange)
+// Queue coordination hook — the gate no-ops until a session is connected.
+usePlayer.setState({ _queueGate: queueGate })

@@ -191,6 +191,16 @@ export const DotsIcon = (p: IconProps): JSX.Element => (
   </Fill>
 )
 
+export const QueueIcon = (p: IconProps): JSX.Element => (
+  <Stroke {...p}>
+    <path d="M4 6h16" />
+    <path d="M4 11h16" />
+    <path d="M4 16h9" />
+    <path d="M17 15v6" />
+    <path d="M20 18h-6" />
+  </Stroke>
+)
+
 export const RevealIcon = (p: IconProps): JSX.Element => (
   <Stroke {...p}>
     <path d="M13 4h7v7" />

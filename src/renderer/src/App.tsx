@@ -8,6 +8,7 @@ import { TopBar } from './components/TopBar'
 import { EmptyState } from './components/EmptyState'
 import { SettingsPanel } from './components/SettingsPanel'
 import { ListenPanel } from './components/ListenPanel'
+import { QueuePanel } from './components/QueuePanel'
 import { NowPlayingBar } from './components/NowPlayingBar'
 import { FolderHero } from './components/FolderHero'
 import { TrackList } from './components/TrackList'
@@ -233,6 +234,7 @@ export function App(): JSX.Element {
         <ScanChip />
       </main>
       <NowPlayingBar />
+      <QueuePanel />
       <SettingsPanel />
       <ListenPanel />
       <Toast />

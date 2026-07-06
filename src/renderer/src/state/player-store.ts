@@ -10,6 +10,14 @@ export type RepeatMode = 'off' | 'all' | 'one'
 /** Transport intent relayed to the Listen Together source when in remote mode. */
 export type RelayCommand = (c: { type: 'play' | 'pause' | 'seek'; value?: number }) => void
 
+/**
+ * Session hook consulted by next(auto) while in a Listen Together session. Returns
+ * true when the session consumed the advance (peer's queued track takes the slot, a
+ * takeover stream is already incoming, or we're the receiver waiting on the source).
+ * Injected by listen/session.ts — same never-crosses-IPC pattern as _relay.
+ */
+export type QueueGate = () => boolean
+
 interface PlayerState {
   queue: string[]
   originalQueue: string[]
@@ -27,8 +35,20 @@ interface PlayerState {
   remote: boolean
   /** Set by the listen session; relays transport intents to the source when remote. */
   _relay: RelayCommand | null
+  /** Explicitly queued track ids — play before the context resumes (Spotify "Up Next"). */
+  upNext: string[]
+  /** Set by the listen session; coordinates whose queue takes the next slot. */
+  _queueGate: QueueGate | null
 
   playContext: (trackIds: string[], startId: string, label?: string) => void
+  /** Append a track to Up Next (plays immediately if nothing is playing). */
+  addToQueue: (trackId: string) => void
+  /** Insert a track at the front of Up Next (plays right after the current track). */
+  playNextInQueue: (trackId: string) => void
+  removeFromUpNext: (i: number) => void
+  clearUpNext: () => void
+  /** Pop the first playable Up Next track and play it now (context position kept). */
+  playUpNextNow: () => void
   /** Load a previously-played track (paused) into its playlist context. */
   restore: (trackId: string, time: number) => void
   togglePlay: () => void
@@ -145,6 +165,65 @@ export const usePlayer = create<PlayerState>((set, get) => {
     contextLabel: null,
     remote: false,
     _relay: null,
+    upNext: [],
+    _queueGate: null,
+
+    addToQueue: (trackId) => {
+      const t = trackOf(trackId)
+      if (!t || t.unsupported) return
+      set((s) => ({ upNext: [...s.upNext, trackId] }))
+      // Nothing playing → the queue would never drain; start it immediately.
+      if (!get().currentTrackId) {
+        get().playUpNextNow()
+        return
+      }
+      useNotice.getState().show(`Added “${t.title}” to the queue.`)
+    },
+
+    playNextInQueue: (trackId) => {
+      const t = trackOf(trackId)
+      if (!t || t.unsupported) return
+      set((s) => ({ upNext: [trackId, ...s.upNext] }))
+      if (!get().currentTrackId) {
+        get().playUpNextNow()
+        return
+      }
+      useNotice.getState().show(`“${t.title}” will play next.`)
+    },
+
+    removeFromUpNext: (i) => {
+      set((s) => ({ upNext: s.upNext.filter((_, idx) => idx !== i) }))
+    },
+
+    clearUpNext: () => set({ upNext: [] }),
+
+    playUpNextNow: () => {
+      // Pop entries until a playable one surfaces (queued files may have vanished).
+      const rest = get().upNext.slice()
+      let track: Track | undefined
+      while (rest.length > 0) {
+        const id = rest.shift()!
+        const t = trackOf(id)
+        if (t && !t.unsupported) {
+          track = t
+          break
+        }
+      }
+      set({ upNext: rest })
+      if (!track) return
+      // Leaving remote (receiver) mode: our queued track takes over — the session's
+      // handoff (onPlayerChange → becomeSourceFor) streams it to the peer.
+      if (get().remote) {
+        useLibrary.getState().setRemoteTrack(null)
+        set({ remote: false, _relay: null })
+      }
+      // Deliberately does NOT touch queue/index — the context resumes where it left
+      // off once Up Next drains, like Spotify's queue.
+      set({ currentTrackId: track.id, currentTime: 0, duration: track.durationSec ?? 0 })
+      saveLast(track.id, 0)
+      engine.load(mediaUrl(track.path))
+      void engine.play()
+    },
 
     playContext: (trackIds, startId, label) => {
       if (trackIds.length === 0) return
@@ -209,13 +288,23 @@ export const usePlayer = create<PlayerState>((set, get) => {
     },
 
     next: (auto = false) => {
-      if (get().remote) return // the source drives track changes
-      const { repeat, index } = get()
-      if (auto && repeat === 'one') {
+      const s = get()
+      // Repeat-one keeps looping on auto-end; queued tracks play on a manual skip.
+      if (auto && s.repeat === 'one' && !s.remote) {
         engine.seek(0)
         void engine.play()
         return
       }
+      // In a Listen session, the gate decides whose queue takes the auto slot (the
+      // source's wins) and suppresses local advance while a takeover is incoming.
+      if (auto && s._queueGate?.()) return
+      // Explicit Up Next beats context — also the receiver's takeover path.
+      if (s.upNext.length > 0) {
+        get().playUpNextNow()
+        return
+      }
+      if (s.remote) return // receiver with nothing queued: the source drives
+      const { repeat, index } = get()
       const target = findPlayable(index, 1, repeat === 'all')
       if (target >= 0) loadAndPlay(target)
       else {

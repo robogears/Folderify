@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import * as session from '../listen/session'
+import type { QueueItem } from '@shared/listen'
 
 /**
  * Listen Together — UI state machine for the Connect panel. Real networking (LAN
@@ -41,6 +42,8 @@ interface ListenState {
   peer: ListenPeer | null
   role: ListenRole
   error: string | null
+  /** What the connected peer has queued (titles only; via queue-notice frames). */
+  peerQueue: QueueItem[]
 
   openPanel: () => void
   closePanel: () => void
@@ -68,6 +71,7 @@ export const useListen = create<ListenState>((set, get) => ({
   peer: null,
   role: null,
   error: null,
+  peerQueue: [],
 
   openPanel: () => {
     set({ panelOpen: true })

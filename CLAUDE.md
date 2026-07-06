@@ -229,8 +229,13 @@ src/
                            rAF time loop throttled ~33ms
       state/library-store.ts  zustand: model + selection (+ALL_SONGS_ID) + search; init() wires IPC
       state/player-store.ts    queue/originalQueue/shuffle/repeat/volume; findPlayable() skips
-                               unsupported tracks; engine errors auto-skip; persists
-                               folderify.volume + folderify.lastplayed
+                               unsupported tracks; engine errors auto-skip (with a consecutive-
+                               failure cap); explicit **upNext** queue (addToQueue/playNextInQueue/
+                               playUpNextNow, drained by next() before the context resumes);
+                               persists folderify.volume + folderify.lastplayed
+      components/QueuePanel.tsx  "Up next" right-drawer (own open-state store); shows now-playing +
+                               upNext + the peer's shared queue. Right-click a TrackRow → Add to
+                               queue / Play next. Queue button lives in NowPlayingBar.
       state/settings-store.ts  layout preset + sidebarCollapsed + resumeLastTrack, persisted via
                                zustand persist ('folderify.settings'); transient settingsOpen
       state/updates-store.ts   update check/download/apply state machine for the UI
@@ -432,6 +437,11 @@ the receiver plays its own copy, kept in lockstep by a clock-synced control prot
   `library-store` (`setRemoteTrack`) so NowPlayingBar/SeekBar/tray/MediaSession render the streamed
   track with no other UI changes. `player-store` gains `remote` + `_relay` (transport guards; never
   crosses IPC — `buildSnapshot` uses explicit fields). CSP `media-src` now allows `blob:`.
+- **Shared queue**: each side broadcasts its `upNext` (titles only) via a `queue-notice` control
+  frame; `listen-store.peerQueue` renders it in the QueuePanel. `player-store.next(auto)` consults a
+  `_queueGate` (injected by session.ts): the **source's** queued track wins the next slot, the
+  receiver's takes it only when the source has none — so both lockstep engines don't grab the slot
+  at once. Whoever's queued track wins becomes source via the normal `becomeSourceFor` handoff.
 - **macOS Local Network permission is mandatory.** macOS 15+/26 silently blocks multicast, the
   signaling TCP, AND WebRTC-to-LAN until the user allows the "find devices on your local network"
   prompt. `NSLocalNetworkUsageDescription` (electron-builder.yml `extendInfo`) supplies the prompt

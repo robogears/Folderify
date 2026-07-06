@@ -5,11 +5,15 @@ import { Cover } from './Cover'
 import { TransportControls } from './TransportControls'
 import { SeekBar } from './SeekBar'
 import { VolumeSlider } from './VolumeSlider'
-import { RevealIcon } from './Icons'
+import { RevealIcon, QueueIcon } from './Icons'
+import { useQueuePanel } from './QueuePanel'
 
 export function NowPlayingBar(): JSX.Element {
   const currentTrackId = usePlayer((s) => s.currentTrackId)
   const track = useLibrary((s) => (currentTrackId ? s.tracksById.get(currentTrackId) : undefined))
+  const upNextCount = usePlayer((s) => s.upNext.length)
+  const toggleQueue = useQueuePanel((s) => s.toggle)
+  const queueOpen = useQueuePanel((s) => s.open)
 
   return (
     <footer className="nowplaying">
@@ -50,6 +54,15 @@ export function NowPlayingBar(): JSX.Element {
       </div>
 
       <div className="np-right">
+        <button
+          className={`icon-btn np-queue ${queueOpen ? 'is-active' : ''}`}
+          title="Up next"
+          aria-label="Up next"
+          onClick={toggleQueue}
+        >
+          <QueueIcon size={18} />
+          {upNextCount > 0 && <span className="np-queue-count">{upNextCount}</span>}
+        </button>
         <VolumeSlider />
       </div>
     </footer>

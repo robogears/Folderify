@@ -37,6 +37,12 @@ export interface RemoteTrackMeta {
   ext: string
 }
 
+/** A queued-track summary shared so both sides can see what's up next. */
+export interface QueueItem {
+  title: string
+  artist: string
+}
+
 /** Control-channel protocol, renderer ↔ renderer over the data channel. */
 export type ControlMsg =
   | { t: 'ping'; t0: number }
@@ -53,6 +59,10 @@ export type ControlMsg =
   | { t: 'load-failed'; transferId: number }
   | { t: 'state'; playing: boolean; position: number; atClock: number; transferId: number }
   | { t: 'command'; cmd: 'play' | 'pause' | 'seek'; value?: number }
+  /** Sent whenever a side's up-next queue changes: what THAT side has queued.
+   *  Coordinates whose track takes the next slot (source's queue wins) and lets
+   *  the peer render the shared "Up next" view. */
+  | { t: 'queue-notice'; items: QueueItem[] }
   | { t: 'bye' }
 
 /** LAN discovery beacon group + port (link-local multicast, TTL 1). */

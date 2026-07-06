@@ -83,15 +83,35 @@ function TrackRowImpl({ track, position, onPlay }: TrackRowProps): JSX.Element {
           />
           <div className="ctx-menu" style={{ left: menu.x, top: menu.y }}>
             {!track.unsupported && (
-              <button
-                className="menu-item"
-                onClick={() => {
-                  setMenu(null)
-                  onPlay(track.id)
-                }}
-              >
-                Play
-              </button>
+              <>
+                <button
+                  className="menu-item"
+                  onClick={() => {
+                    setMenu(null)
+                    onPlay(track.id)
+                  }}
+                >
+                  Play
+                </button>
+                <button
+                  className="menu-item"
+                  onClick={() => {
+                    setMenu(null)
+                    usePlayer.getState().playNextInQueue(track.id)
+                  }}
+                >
+                  Play next
+                </button>
+                <button
+                  className="menu-item"
+                  onClick={() => {
+                    setMenu(null)
+                    usePlayer.getState().addToQueue(track.id)
+                  }}
+                >
+                  Add to queue
+                </button>
+              </>
             )}
             <button
               className="menu-item"
