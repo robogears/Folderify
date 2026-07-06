@@ -1,15 +1,19 @@
-// WebRTC signaling relay over a plain TCP socket (node:net, no dependency). Both
-// ends are Folderify main processes, so newline-delimited JSON is enough — no WS
-// handshake needed. This carries the PIN pairing handshake and then relays the
-// renderers' SDP/ICE opaquely. Exactly one active connection at a time.
+// WebRTC signaling relay over a plain TCP socket (node:net, no dependency). Both ends
+// are Folderify main processes, so newline-delimited JSON is enough. This carries the
+// pairing handshake — an APPROVAL model (no PIN): the caller sends its stable id + name,
+// and the callee either auto-accepts a TRUSTED id or prompts its user (Allow / Deny,
+// with an option to trust the device forever). Then it relays the renderers' SDP/ICE
+// opaquely. Exactly one active connection at a time.
 
 import net from 'node:net'
 import { LISTEN_SIG_PORT, type ListenPeer } from '../../shared/listen'
 
 interface SignalingOpts {
-  /** The 6-digit code an incoming caller must present to be accepted. */
-  getPin: () => string
   getIdentity: () => { id: string; name: string }
+  /** Has this peer id been trusted before? (→ auto-accept, no prompt) */
+  isTrusted: (id: string) => boolean
+  /** A not-yet-trusted peer is asking to connect — prompt the user (→ respond()). */
+  onIncoming: (peer: ListenPeer) => void
   onConnected: (c: { role: 'caller' | 'callee'; peer: ListenPeer }) => void
   onSignal: (payload: unknown) => void
   onError: (reason: string) => void
@@ -45,15 +49,13 @@ function writeLine(sock: net.Socket, obj: unknown): void {
   }
 }
 
-/** Wrong-PIN attempts allowed per session before pairing locks. A 6-digit PIN has no
- *  brute-force resistance on its own; capping attempts is what makes it safe on a LAN. */
-const MAX_PIN_FAILURES = 5
+/** How long the callee's approval prompt (and the caller's wait) stay open. */
+const APPROVE_TIMEOUT_MS = 30_000
 
 export class Signaling {
   private server?: net.Server
   private active?: net.Socket
-  private pinFailures = 0
-  private locked = false
+  private pending?: { sock: net.Socket; peer: ListenPeer; timer: ReturnType<typeof setTimeout> }
   port = 0
 
   constructor(private opts: SignalingOpts) {}
@@ -67,8 +69,6 @@ export class Signaling {
     }
     let triedEphemeral = false
     server.on('error', (err: NodeJS.ErrnoException) => {
-      // Preferred fixed port is taken (another instance on this Mac) — fall back to an
-      // ephemeral one. Manual "connect by IP" then only works for the fixed-port peer.
       if (err.code === 'EADDRINUSE' && !triedEphemeral) {
         triedEphemeral = true
         server.listen(0, '0.0.0.0')
@@ -81,17 +81,10 @@ export class Signaling {
     this.server = server
   }
 
-  // --- Callee side: a peer connected to us and must present the right PIN. ---
+  // --- Callee side: a peer wants to connect. Auto-accept if trusted, else prompt. ---
   private handleIncoming(sock: net.Socket): void {
     sock.on('error', () => {})
-    // Too many wrong PINs this session → refuse all further attempts. The attacker
-    // can't keep guessing; the user re-opens the panel to get a fresh PIN.
-    if (this.locked) {
-      writeLine(sock, { t: 'reject', reason: 'locked' })
-      sock.end()
-      return
-    }
-    if (this.active) {
+    if (this.active || this.pending) {
       writeLine(sock, { t: 'reject', reason: 'busy' })
       sock.end()
       return
@@ -101,49 +94,85 @@ export class Signaling {
       if (!helloSeen) {
         if (m.t !== 'hello') return
         helloSeen = true
-        if (String(m.pin) !== this.opts.getPin()) {
-          this.pinFailures++
-          if (this.pinFailures >= MAX_PIN_FAILURES) {
-            this.locked = true
-            this.opts.onError('locked')
-          }
-          writeLine(sock, { t: 'reject', reason: this.locked ? 'locked' : 'pin' })
-          sock.end()
+        const peer: ListenPeer = { id: String(m.id ?? ''), name: String(m.name ?? 'Mac') }
+        if (peer.id && this.opts.isTrusted(peer.id)) {
+          this.acceptSock(sock, peer)
           return
         }
-        this.active = sock
-        const me = this.opts.getIdentity()
-        writeLine(sock, { t: 'accept', id: me.id, name: me.name })
-        sock.on('close', () => this.onSocketClosed(sock))
-        this.opts.onConnected({
-          role: 'callee',
-          peer: { id: String(m.id ?? ''), name: String(m.name ?? 'Mac') }
-        })
+        // Hold the socket and ask the user.
+        const timer = setTimeout(() => {
+          if (this.pending?.sock === sock) {
+            writeLine(sock, { t: 'reject', reason: 'timeout' })
+            try {
+              sock.end()
+            } catch {
+              /* ignore */
+            }
+            this.pending = undefined
+            // We clear `pending` before sock.end()'s async 'close' fires, so that handler's
+            // guard is already false — notify here or the callee's Allow/Deny prompt hangs
+            // on screen forever (and a late Allow silently no-ops).
+            this.opts.onClosed()
+          }
+        }, APPROVE_TIMEOUT_MS)
+        this.pending = { sock, peer, timer }
+        this.opts.onIncoming(peer)
         return
       }
       this.route(m)
     })
+    sock.on('close', () => {
+      if (this.pending?.sock === sock) {
+        clearTimeout(this.pending.timer)
+        this.pending = undefined
+        // Caller gave up before we answered — tell the UI to drop the Allow/Deny prompt.
+        this.opts.onClosed()
+      }
+    })
   }
 
-  // --- Caller side: we reach out to a discovered peer with their PIN. ---
-  connect(
-    host: string,
-    port: number,
-    pin: string,
-    me: { id: string; name: string },
-    peer: ListenPeer
-  ): void {
-    if (this.active) {
+  private acceptSock(sock: net.Socket, peer: ListenPeer): void {
+    this.active = sock
+    const me = this.opts.getIdentity()
+    writeLine(sock, { t: 'accept', id: me.id, name: me.name })
+    sock.on('close', () => this.onSocketClosed(sock))
+    this.opts.onConnected({ role: 'callee', peer })
+  }
+
+  /** The callee user's decision on the pending incoming request. Returns the peer so
+   *  the caller of respond() (main) can persist trust when asked. */
+  respond(accept: boolean): ListenPeer | null {
+    const p = this.pending
+    if (!p) return null
+    clearTimeout(p.timer)
+    this.pending = undefined
+    if (accept) {
+      this.acceptSock(p.sock, p.peer)
+    } else {
+      writeLine(p.sock, { t: 'reject', reason: 'declined' })
+      try {
+        p.sock.end()
+      } catch {
+        /* ignore */
+      }
+    }
+    return p.peer
+  }
+
+  // --- Caller side: reach out to a discovered peer (no PIN; the callee approves). ---
+  connect(host: string, port: number, me: { id: string; name: string }, peer: ListenPeer): void {
+    if (this.active || this.pending) {
       this.opts.onError('busy')
       return
     }
     const sock = net.createConnection({ host, port }, () => {
-      writeLine(sock, { t: 'hello', pin, id: me.id, name: me.name })
+      writeLine(sock, { t: 'hello', id: me.id, name: me.name })
     })
+    // Longer than the callee's prompt window so their reject arrives first.
     const timeout = setTimeout(() => {
       this.opts.onError('timeout')
       sock.destroy()
-    }, 8000)
+    }, APPROVE_TIMEOUT_MS + 5_000)
     let accepted = false
     sock.on('error', () => {
       clearTimeout(timeout)
@@ -187,7 +216,20 @@ export class Signaling {
     }
   }
 
+  private clearPending(): void {
+    if (this.pending) {
+      clearTimeout(this.pending.timer)
+      try {
+        this.pending.sock.end()
+      } catch {
+        /* ignore */
+      }
+      this.pending = undefined
+    }
+  }
+
   disconnect(): void {
+    this.clearPending()
     const s = this.active
     if (!s) return
     this.active = undefined
@@ -201,6 +243,7 @@ export class Signaling {
   }
 
   stop(): void {
+    this.clearPending()
     this.disconnect()
     try {
       this.server?.close()

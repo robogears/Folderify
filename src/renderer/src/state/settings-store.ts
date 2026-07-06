@@ -18,6 +18,8 @@ interface SettingsState {
   resumeLastTrack: boolean
   /** Grab F7/F8/F9 system-wide so only Folderify gets them (macOS; default OFF). */
   exclusiveMediaKeys: boolean
+  /** Listen Together: re-encode lossless tracks smaller before streaming (default ON). */
+  compressTransfers: boolean
   /** Transient (not persisted): whether the settings panel is open. */
   settingsOpen: boolean
 
@@ -26,6 +28,7 @@ interface SettingsState {
   toggleSidebar: () => void
   setResumeLastTrack: (v: boolean) => void
   setExclusiveMediaKeys: (v: boolean) => void
+  setCompressTransfers: (v: boolean) => void
   openSettings: () => void
   closeSettings: () => void
 }
@@ -37,6 +40,7 @@ export const useSettings = create<SettingsState>()(
       sidebarCollapsed: false,
       resumeLastTrack: true,
       exclusiveMediaKeys: false,
+      compressTransfers: true,
       settingsOpen: false,
 
       setLayout: (layout) => set({ layout }),
@@ -68,6 +72,8 @@ export const useSettings = create<SettingsState>()(
           })
       },
 
+      setCompressTransfers: (compressTransfers) => set({ compressTransfers }),
+
       openSettings: () => set({ settingsOpen: true }),
       closeSettings: () => set({ settingsOpen: false })
     }),
@@ -78,7 +84,8 @@ export const useSettings = create<SettingsState>()(
         layout: s.layout,
         sidebarCollapsed: s.sidebarCollapsed,
         resumeLastTrack: s.resumeLastTrack,
-        exclusiveMediaKeys: s.exclusiveMediaKeys
+        exclusiveMediaKeys: s.exclusiveMediaKeys,
+        compressTransfers: s.compressTransfers
       })
     }
   )

@@ -1458,6 +1458,16 @@
   line-height: 1.35;
   color: var(--text-muted);
 }
+.setting-action {
+  flex: 0 0 auto;
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-medium);
+  color: var(--accent);
+  padding: 4px 10px;
+  border-radius: var(--r-pill);
+  background: var(--surface-3);
+  white-space: nowrap;
+}
 .switch {
   position: relative;
   flex: 0 0 auto;
@@ -2564,34 +2574,6 @@
 .listen-error {
   font-size: var(--fs-meta);
   color: #ff6b6b;
-}
-
-.listen-pin {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-weight: var(--fw-semibold);
-  letter-spacing: 2px;
-  color: var(--text-primary);
-}
-.listen-pin-input {
-  height: 46px;
-  padding: 0 var(--sp-4);
-  border-radius: var(--r-md);
-  background: var(--surface-2);
-  border: 1px solid var(--border-strong);
-  color: var(--text-primary);
-  font-size: 1.15rem;
-  letter-spacing: 6px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  outline: none;
-  transition: border-color var(--t-base), box-shadow var(--t-base);
-}
-.listen-pin-input::placeholder {
-  color: var(--text-faint);
-  letter-spacing: 6px;
-}
-.listen-pin-input:focus {
-  border-color: rgba(124, 92, 255, 0.5);
-  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 .listen-cta {

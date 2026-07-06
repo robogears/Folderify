@@ -1,14 +1,17 @@
 // Thin wrapper over a single RTCPeerConnection with ONE data channel that carries
 // both JSON control messages (strings) and binary audio chunks (ArrayBuffers). Using
 // one channel means WebRTC's in-order guarantee covers control ↔ media ordering, so a
-// `load` message can never arrive after the bytes it describes. SDP/ICE flow through
-// the `sendSignal` callback (relayed by main to the peer); DTLS encrypts everything.
+// `load` message can never arrive after the bytes it describes. Every binary frame is
+// TAGGED with a 4-byte LE transferId header so a live track and background prefetches
+// can interleave on the same channel. SDP/ICE flow through the `sendSignal` callback
+// (relayed by main to the peer); DTLS encrypts everything.
 
-import { LISTEN_CHUNK_SIZE, type SignalPayload } from '@shared/listen'
+import { LISTEN_CHUNK_SIZE, LISTEN_FRAME_HEADER, type SignalPayload } from '@shared/listen'
 
 export interface PeerHandlers {
   onControl: (msg: unknown) => void
-  onBytes: (buf: ArrayBuffer) => void
+  /** A demuxed binary frame: which transfer it belongs to + the payload bytes. */
+  onBytes: (transferId: number, buf: ArrayBuffer) => void
   onOpen: () => void
   /** reason: 'failed' | 'closed' | 'channel-closed' — surfaced to the user. */
   onClose: (reason?: string) => void
@@ -82,7 +85,10 @@ export class ListenPeerConn {
           /* ignore malformed control frame */
         }
       } else if (e.data instanceof ArrayBuffer) {
-        this.handlers.onBytes(e.data)
+        // Demux: 4-byte LE transferId header, then the payload.
+        if (e.data.byteLength <= LISTEN_FRAME_HEADER) return
+        const id = new DataView(e.data).getUint32(0, true)
+        this.handlers.onBytes(id, e.data.slice(LISTEN_FRAME_HEADER))
       }
     }
   }
@@ -136,19 +142,34 @@ export class ListenPeerConn {
     }
   }
 
-  /** Send binary audio, split into SCTP-safe chunks with backpressure. */
-  async sendBytes(data: Uint8Array): Promise<void> {
+  /**
+   * Send binary bytes for one transfer, split into SCTP-safe framed chunks with
+   * backpressure. `shouldAbort` is checked between chunks so a background prefetch
+   * can be preempted mid-stream by a user-picked track.
+   * Returns 'sent' | 'aborted' | 'closed'.
+   */
+  async sendBytes(
+    transferId: number,
+    data: Uint8Array,
+    shouldAbort?: () => boolean
+  ): Promise<'sent' | 'aborted' | 'closed'> {
     for (let off = 0; off < data.byteLength; off += LISTEN_CHUNK_SIZE) {
-      if (!this.dc || this.dc.readyState !== 'open') return
+      if (shouldAbort?.()) return 'aborted'
+      if (!this.dc || this.dc.readyState !== 'open') return 'closed'
       if (this.dc.bufferedAmount > BUFFER_HIGH) await this.waitForDrain()
-      if (!this.dc || this.dc.readyState !== 'open') return
+      if (shouldAbort?.()) return 'aborted'
+      if (!this.dc || this.dc.readyState !== 'open') return 'closed'
       const end = Math.min(off + LISTEN_CHUNK_SIZE, data.byteLength)
+      const frame = new Uint8Array(LISTEN_FRAME_HEADER + (end - off))
+      new DataView(frame.buffer).setUint32(0, transferId, true)
+      frame.set(data.subarray(off, end), LISTEN_FRAME_HEADER)
       try {
-        this.dc.send(data.slice(off, end))
+        this.dc.send(frame)
       } catch {
-        return
+        return 'closed'
       }
     }
+    return 'sent'
   }
 
   private waitForDrain(): Promise<void> {

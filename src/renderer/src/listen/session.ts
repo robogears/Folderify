@@ -1,29 +1,46 @@
 // The Listen Together session controller — the protocol brain that sits between the
 // native transport (window.api.listen + WebRTC peer) and the app's stores/engine.
 //
-// Model: whoever last picks a track is the "source". The source plays locally as
-// normal AND streams the encoded file bytes to the peer; the receiver reassembles them
-// into a Blob, plays its own copy, and stays in lockstep via a clock-synced control
-// protocol. Either side can grab control by picking a track. See
-// docs/listen-together-design.md.
+// Model: whoever last picks a track is the "source". The source plays locally as normal
+// AND streams the track's encoded bytes to the peer; the receiver plays its own copy in
+// lockstep via a clock-synced control protocol. Either side can grab control by picking
+// a track. See docs/listen-together-design.md.
 //
-// When the native backend is absent (plain-browser harness / non-Electron), everything
-// falls back to a local SIMULATION so the Connect UI still works for development.
+// Speed features (all optional / degrade gracefully):
+//  - TRANSCODE: lossless (flac/wav) tracks are re-encoded to Opus/WebM in memory on the
+//    source (8-10× smaller on the wire, and MSE-streamable). Library files are never
+//    touched. Behind the "compress transfers" setting; any failure sends the original.
+//  - PROGRESSIVE PLAYBACK: mp3 + webm play via MediaSource as bytes arrive (~1s start);
+//    other containers buffer to a Blob and play on completion.
+//  - PREFETCH: the source broadcasts its next ~20 tracks (the "horizon"); the receiver
+//    pre-downloads the next few into an LRU cache, so skipping to them is instant.
+//    Transfers are TAGGED (peer.ts frames each chunk with its transferId) so a live
+//    track and background prefetches share one channel; a live pick preempts prefetch.
+//
+// When the native backend is absent (browser harness), everything falls back to a local
+// SIMULATION so the Connect UI still works for development.
 
 import { engine } from '../audio/engine'
 import { usePlayer } from '../state/player-store'
 import { useLibrary } from '../state/library-store'
 import { useListen } from '../state/listen-store'
 import { useNotice } from '../state/notice-store'
+import { useSettings } from '../state/settings-store'
 import type { Track } from '@shared/models'
-import { LISTEN_MAX_TRANSFER } from '@shared/listen'
-import type {
-  ControlMsg,
-  ListenPeer,
-  QueueItem,
-  RemoteTrackMeta,
-  SignalPayload
+import {
+  LISTEN_MAX_TRANSFER,
+  LISTEN_HORIZON_COUNT,
+  LISTEN_PREFETCH_COUNT,
+  LISTEN_CACHE_MAX_ENTRIES,
+  LISTEN_CACHE_MAX_BYTES,
+  type ControlMsg,
+  type HorizonItem,
+  type ListenPeer,
+  type QueueItem,
+  type RemoteTrackMeta,
+  type SignalPayload
 } from '@shared/listen'
+import { shouldTranscode, transcodeToOpusWebm } from './transcode'
 import { ListenPeerConn } from './peer'
 
 const hasNative = typeof window !== 'undefined' && !!window.api?.listen
@@ -36,8 +53,7 @@ let role: 'idle' | 'source' | 'receiver' = 'idle'
 let connectedPeer: ListenPeer | null = null
 let applyingRemote = false
 let transferSeq = 0
-let currentTransferId = 0
-let currentBlobUrl: string | null = null
+let currentTransferId = 0 // the live playback transfer (source + receiver)
 let clockOffset = 0 // estimated (sourceClock - myClock) in ms
 let pingTimer: number | undefined
 let stateTimer: number | undefined
@@ -45,27 +61,60 @@ let connectTimer: number | undefined
 let rxStallTimer: number | undefined
 let prevTrackId: string | null = null
 let prevPlaying = false
-// Whether the peer has tracks in ITS up-next queue (kept fresh via queue-notice).
 let peerHasNext = false
 let prevUpNext: string[] = []
 
-// Abandon an in-progress receive if no bytes arrive for this long (source died /
-// unreadable file). Reset on every chunk, so it fires on a STALL, not on total size.
 const RX_STALL_MS = 20000
 
-interface RxState {
+// ── Source-side transfer prep cache: srcId → prepared {bytes, container} ──────
+interface Prepared {
+  bytes: Uint8Array
+  container: string
+}
+const srcCache = new Map<string, Prepared>()
+const pendingLoads = new Map<number, string>() // live transferId → srcId (awaiting need/have)
+let prefetchAbort = false // set true to preempt an in-flight prefetch stream
+
+// ── Receiver-side prefetch cache (LRU) + active-transfer registry ────────────
+const prefetchCache = new Map<string, Prepared>() // srcId → cached bytes (insertion-ordered)
+let prefetchCacheBytes = 0
+const requestedPrefetch = new Set<string>() // srcId currently being prefetched (one at a time)
+let peerHorizonItems: HorizonItem[] = [] // last horizon received (drives prefetch)
+
+interface MseSink {
+  ms: MediaSource
+  url: string
+  sb: SourceBuffer | null
+  queue: Uint8Array[]
+  wantEnd: boolean
+}
+interface PlaySink {
+  kind: 'play'
   transferId: number
+  srcId: string
+  container: string
   size: number
   meta: RemoteTrackMeta
   position: number
   playing: boolean
-  chunks: Uint8Array[]
   received: number
+  chunks: Uint8Array[] // always accumulated (blob fallback + cache)
+  mse: MseSink | null
   done: boolean
 }
-let rx: RxState | null = null
+interface PrefetchSink {
+  kind: 'prefetch'
+  transferId: number
+  srcId: string
+  container: string
+  size: number
+  chunks: Uint8Array[]
+  received: number
+}
+type RxSink = PlaySink | PrefetchSink
+const rxByTransfer = new Map<number, RxSink>()
+let currentBlobUrl: string | null = null // the live <audio> object URL (blob or MSE)
 
-// Relay the receiver's transport intents to the source (which is authoritative).
 const relay = (c: { type: 'play' | 'pause' | 'seek'; value?: number }): void => {
   peer?.send({ t: 'command', cmd: c.type, value: c.value })
 }
@@ -75,8 +124,11 @@ function extOf(p: string): string {
   return i >= 0 ? p.slice(i + 1).toLowerCase() : ''
 }
 
-function mimeFor(ext: string): string {
-  switch (ext) {
+/** Playback MIME for a transfer container. */
+function mimeForContainer(container: string): string {
+  switch (container) {
+    case 'webm':
+      return 'audio/webm; codecs="opus"'
     case 'm4a':
     case 'aac':
     case 'mp4':
@@ -84,6 +136,7 @@ function mimeFor(ext: string): string {
     case 'flac':
       return 'audio/flac'
     case 'wav':
+    case 'wave':
       return 'audio/wav'
     case 'ogg':
     case 'oga':
@@ -94,13 +147,23 @@ function mimeFor(ext: string): string {
     case 'aifc':
       return 'audio/aiff'
     default:
-      return 'audio/mpeg'
+      return 'audio/mpeg' // mp3 + fallback
   }
 }
 
-function synthTrack(transferId: number, meta: RemoteTrackMeta, size: number): Track {
+/** Containers we play progressively via MediaSource (start before full download). */
+function mseCapable(container: string): boolean {
+  if (container !== 'mp3' && container !== 'webm') return false
+  try {
+    return typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported(mimeForContainer(container))
+  } catch {
+    return false
+  }
+}
+
+function synthTrack(id: string, meta: RemoteTrackMeta, size: number): Track {
   return {
-    id: `remote:${transferId}`,
+    id,
     path: '',
     mtimeMs: 0,
     size,
@@ -121,16 +184,14 @@ function synthTrack(transferId: number, meta: RemoteTrackMeta, size: number): Tr
   }
 }
 
-function pinErrorText(reason: string): string {
+function connectErrorText(reason: string): string {
   switch (reason) {
-    case 'pin':
-      return "That code didn't match. Check the code on the other Mac and try again."
+    case 'declined':
+      return 'The other Mac declined the connection.'
     case 'timeout':
-      return "The other Mac didn't respond. Make sure Listen Together is open there."
+      return "The other Mac didn't accept in time. Make sure Folderify is running there."
     case 'busy':
       return 'That Mac is already in a listening session.'
-    case 'locked':
-      return 'Too many wrong codes — pairing is locked. Close and reopen Listen Together to try again.'
     case 'peer-gone':
       return 'That device is no longer nearby.'
     default:
@@ -145,6 +206,9 @@ function initNative(): void {
   nativeInited = true
   const api = window.api.listen
   api.onPeers((peers) => useListen.setState({ peers }))
+  // An untrusted peer wants in — surface the Allow/Deny prompt even if the panel is
+  // closed (net runs for the app's lifetime, so requests can arrive anytime).
+  api.onIncoming((p) => useListen.setState({ incoming: p, panelOpen: true }))
   api.onConnected((c) => onConnected(c.role, c.peer))
   api.onSignal((payload) => void peer?.handleSignal(payload as SignalPayload))
   api.onError((e) => onSignalError(e))
@@ -155,7 +219,7 @@ function onConnected(peerRole: 'caller' | 'callee', p: ListenPeer): void {
   console.info('[listen] signaling connected as', peerRole, '→ peer', p.name)
   connectedPeer = p
   role = 'idle'
-  useListen.setState({ status: 'connecting', peer: p, role: null, error: null, panelOpen: true })
+  useListen.setState({ status: 'connecting', peer: p, role: null, error: null, incoming: null, panelOpen: true })
   peer = new ListenPeerConn(peerRole, (sp) => window.api.listen.sendSignal(sp), {
     onControl: (m) => handleControl(m as ControlMsg),
     onBytes: handleBytes,
@@ -163,18 +227,12 @@ function onConnected(peerRole: 'caller' | 'callee', p: ListenPeer): void {
     onClose: onPeerClosed
   })
   void peer.start()
-  // No WebRTC connection-attempt timeout exists natively — if ICE never completes
-  // (permission blocked, different subnets) the UI would hang on "Connecting…" forever.
   if (connectTimer) window.clearTimeout(connectTimer)
   connectTimer = window.setTimeout(() => {
     if (useListen.getState().status !== 'connected') onPeerClosed('timeout')
   }, 15000)
 }
 
-// The WebRTC connection dropped or never established. If we never reached a working
-// session, that almost always means a blocked LAN path (permission / different Wi-Fi) —
-// say so instead of silently returning to idle. A drop after a working session just
-// returns to idle quietly (the disconnect is self-explanatory).
 function onPeerClosed(_reason?: string): void {
   const neverConnected = useListen.getState().status === 'connecting'
   teardown()
@@ -189,11 +247,7 @@ function onPeerClosed(_reason?: string): void {
 }
 
 function onSignalError(e: { reason: string; message: string }): void {
-  const st = useListen.getState()
-  useListen.setState({
-    status: st.peer ? 'pairing' : 'discovering',
-    error: pinErrorText(e.reason)
-  })
+  useListen.setState({ status: 'discovering', error: connectErrorText(e.reason), incoming: null })
 }
 
 function onChannelOpen(): void {
@@ -204,11 +258,9 @@ function onChannelOpen(): void {
   }
   useListen.setState({ status: 'connected', error: null })
   startTimers()
-  // If we're already playing a local track, immediately source it to the new peer.
   const s = usePlayer.getState()
   prevTrackId = s.currentTrackId
   prevPlaying = s.isPlaying
-  // Tell the peer what we already have queued (and prime the change detector).
   prevUpNext = s.upNext
   if (s.upNext.length > 0) sendQueueNotice(s.upNext)
   const local = localTrack(s.currentTrackId)
@@ -221,13 +273,38 @@ function localTrack(id: string | null): Track | undefined {
   return useLibrary.getState().tracksById.get(id)
 }
 
-async function becomeSourceFor(track: Track, position: number, playing: boolean): Promise<void> {
-  if (!peer) return
-  role = 'source'
-  useListen.setState({ role: 'source' })
-  const transferId = ++transferSeq
-  currentTransferId = transferId
-  const meta: RemoteTrackMeta = {
+/** Read + (optionally) transcode a track once; cached by srcId (LRU cap). */
+async function prepareTransfer(track: Track): Promise<Prepared | null> {
+  const cached = srcCache.get(track.id)
+  if (cached) return cached
+  const raw = await window.api.listen.readTrack(track.path)
+  if (!raw) return null
+  const ext = extOf(track.path)
+  let bytes: Uint8Array = new Uint8Array(raw)
+  let container = ext
+  if (useSettings.getState().compressTransfers && shouldTranscode(ext)) {
+    const webm = await transcodeToOpusWebm(raw)
+    if (webm) {
+      bytes = webm
+      container = 'webm'
+      console.info(
+        `[listen] transcoded ${track.title}: ${raw.byteLength} → ${webm.byteLength} bytes`
+      )
+    }
+  }
+  const entry: Prepared = { bytes, container }
+  srcCache.set(track.id, entry)
+  // LRU cap: drop oldest beyond 8 entries.
+  while (srcCache.size > 8) {
+    const oldest = srcCache.keys().next().value as string | undefined
+    if (oldest === undefined) break
+    srcCache.delete(oldest)
+  }
+  return entry
+}
+
+function metaOf(track: Track): RemoteTrackMeta {
+  return {
     title: track.title,
     artist: track.artist,
     album: track.album,
@@ -235,29 +312,83 @@ async function becomeSourceFor(track: Track, position: number, playing: boolean)
     codec: track.codec,
     ext: extOf(track.path)
   }
-  console.info('[listen] sourcing track to peer:', track.title, `(${track.size} bytes)`)
-  peer.send({ t: 'load', transferId, size: track.size, meta, position, playing })
+}
+
+async function becomeSourceFor(track: Track, position: number, playing: boolean): Promise<void> {
+  if (!peer) return
+  role = 'source'
+  useListen.setState({ role: 'source' })
+  const transferId = ++transferSeq
+  currentTransferId = transferId
+  prefetchAbort = true // a live pick preempts any background prefetch
+  broadcastHorizon()
+  console.info('[listen] sourcing track to peer:', track.title)
   try {
-    // Read via MAIN (direct fs), not a renderer fetch('media://…') — the cross-scheme
-    // fetch failed in the field ("couldn't send that track"). Main confines the path
-    // to the library root.
-    const bytes = await window.api.listen.readTrack(track.path)
-    if (currentTransferId !== transferId) return // superseded by a newer track
-    if (!bytes) {
-      // Unreadable (missing / online-only cloud file). Tell the peer so it clears its
-      // "loading" state instead of hanging on the track title.
+    const prepared = await prepareTransfer(track)
+    if (currentTransferId !== transferId) return // superseded while preparing
+    if (!prepared) {
       peer.send({ t: 'load-failed', transferId })
       return
     }
-    await peer.sendBytes(new Uint8Array(bytes))
-    if (currentTransferId === transferId) {
-      peer.send({ t: 'loaded', transferId })
-      sendState()
-    }
+    pendingLoads.set(transferId, track.id)
+    peer.send({
+      t: 'load',
+      transferId,
+      srcId: track.id,
+      size: prepared.bytes.byteLength,
+      container: prepared.container,
+      meta: metaOf(track),
+      position,
+      playing
+    })
+    sendState()
+    // Receiver replies 'need' (→ streamLive) or 'have' (cached; nothing to send).
   } catch (err) {
-    console.error('[listen] stream error:', err)
+    console.error('[listen] prepare/source error:', err)
     if (currentTransferId === transferId) peer.send({ t: 'load-failed', transferId })
   }
+}
+
+async function streamLive(transferId: number): Promise<void> {
+  const srcId = pendingLoads.get(transferId)
+  pendingLoads.delete(transferId)
+  if (!srcId || !peer) return
+  const prepared = srcCache.get(srcId)
+  if (!prepared) {
+    peer.send({ t: 'load-failed', transferId })
+    return
+  }
+  prefetchAbort = true // ensure prefetch yields the channel
+  const res = await peer.sendBytes(transferId, prepared.bytes, () => currentTransferId !== transferId)
+  if (res === 'sent' && currentTransferId === transferId) {
+    peer.send({ t: 'loaded', transferId })
+    sendState()
+  }
+}
+
+async function handlePrefetchRequest(srcId: string): Promise<void> {
+  if (!peer) return
+  const track = useLibrary.getState().tracksById.get(srcId)
+  if (!track) {
+    peer.send({ t: 'fetch-failed', srcId })
+    return
+  }
+  let prepared: Prepared | null
+  try {
+    prepared = await prepareTransfer(track)
+  } catch {
+    prepared = null
+  }
+  if (!prepared || !peer) {
+    peer?.send({ t: 'fetch-failed', srcId })
+    return
+  }
+  const transferId = ++transferSeq
+  peer.send({ t: 'prefetch', transferId, srcId, size: prepared.bytes.byteLength, container: prepared.container })
+  prefetchAbort = false
+  const res = await peer.sendBytes(transferId, prepared.bytes, () => prefetchAbort)
+  if (res === 'sent') peer.send({ t: 'prefetch-done', transferId })
+  else peer.send({ t: 'xfer-abort', transferId })
 }
 
 function sendState(): void {
@@ -282,13 +413,59 @@ function applyCommandAsSource(m: Extract<ControlMsg, { t: 'command' }>): void {
   }
 }
 
-// React to local playback changes: picking a local track (while connected) makes us
-// the source; a play/pause change re-broadcasts state; an up-next change tells the
-// peer what we have queued (so the shared "Up next" view and the gate stay fresh).
+// The source's next ~20 tracks in play order: the current, then the explicit up-next
+// queue, then the playlist continuation (in the queue's shuffled order if shuffle is on).
+function computeHorizon(): HorizonItem[] {
+  const p = usePlayer.getState()
+  const lib = useLibrary.getState()
+  const ids: string[] = []
+  const seen = new Set<string>()
+  const push = (id: string): void => {
+    if (!id || id.startsWith('remote:') || seen.has(id)) return
+    seen.add(id)
+    ids.push(id)
+  }
+  if (p.currentTrackId) push(p.currentTrackId)
+  for (const id of p.upNext) push(id)
+  // Playlist continuation after the current index.
+  const from = p.index >= 0 ? p.index : 0
+  for (let i = from + 1; i < p.queue.length && ids.length < LISTEN_HORIZON_COUNT + 1; i++) {
+    push(p.queue[i])
+  }
+  return ids
+    .slice(0, LISTEN_HORIZON_COUNT + 1)
+    .flatMap((id) => {
+      const t = lib.tracksById.get(id)
+      if (!t) return []
+      return [
+        {
+          srcId: id,
+          title: t.title,
+          artist: t.artist,
+          durationSec: t.durationSec,
+          size: t.size,
+          ext: extOf(t.path)
+        } satisfies HorizonItem
+      ]
+    })
+}
+
+let lastHorizonKey = ''
+function broadcastHorizon(): void {
+  if (role !== 'source' || !peer) return
+  const items = computeHorizon()
+  const key = items.map((i) => i.srcId).join(',')
+  if (key === lastHorizonKey) return
+  lastHorizonKey = key
+  peer.send({ t: 'horizon', items })
+}
+
+// React to local playback changes.
 function onPlayerChange(s: PlayerSnapshot): void {
   if (connectedPeer && s.upNext !== prevUpNext) {
     prevUpNext = s.upNext
     sendQueueNotice(s.upNext)
+    if (role === 'source') broadcastHorizon()
   }
   if (!connectedPeer || applyingRemote) {
     prevTrackId = s.currentTrackId
@@ -304,7 +481,7 @@ function onPlayerChange(s: PlayerSnapshot): void {
   prevPlaying = s.isPlaying
 }
 
-// ============================================================ shared queue
+// ============================================================ shared queue / horizon
 function sendQueueNotice(upNext: string[]): void {
   const lib = useLibrary.getState()
   const items: QueueItem[] = upNext.slice(0, 50).flatMap((id) => {
@@ -315,7 +492,6 @@ function sendQueueNotice(upNext: string[]): void {
 }
 
 function applyQueueNotice(m: Extract<ControlMsg, { t: 'queue-notice' }>): void {
-  // Peer data — validate shape and cap sizes before it touches state/UI.
   const items = Array.isArray(m.items)
     ? m.items.slice(0, 50).map((it) => ({
         title: String(it?.title ?? '').slice(0, 200),
@@ -326,35 +502,172 @@ function applyQueueNotice(m: Extract<ControlMsg, { t: 'queue-notice' }>): void {
   useListen.setState({ peerQueue: items })
 }
 
-/**
- * Consulted by player-store's next(auto) while connected — decides whose queued
- * track takes the next slot. Precedence: the SOURCE's own queue wins; the receiver's
- * queue takes the slot only when the source has nothing queued. Both engines end at
- * ~the same moment (both play local copies in lockstep), so each side deciding from
- * the same shared state keeps them from grabbing the slot simultaneously.
- * Returns true when the session consumed the advance.
- */
+function applyHorizon(m: Extract<ControlMsg, { t: 'horizon' }>): void {
+  const items: HorizonItem[] = Array.isArray(m.items)
+    ? m.items.slice(0, LISTEN_HORIZON_COUNT + 1).flatMap((it) => {
+        const size = Number(it?.size)
+        if (!it || typeof it.srcId !== 'string') return []
+        return [
+          {
+            srcId: it.srcId.slice(0, 200),
+            title: String(it.title ?? '').slice(0, 200),
+            artist: String(it.artist ?? '').slice(0, 200),
+            durationSec: Number.isFinite(Number(it.durationSec)) ? Number(it.durationSec) : null,
+            size: Number.isFinite(size) && size >= 0 ? size : 0,
+            ext: String(it.ext ?? '').slice(0, 12)
+          }
+        ]
+      })
+    : []
+  peerHorizonItems = items
+  useListen.setState({ peerHorizon: items })
+  drivePrefetch()
+}
+
 function queueGate(): boolean {
   if (!connectedPeer) return false
   const st = usePlayer.getState()
-  if (st.remote) {
-    // Receiver: take the slot with our queued track only if the source has none —
-    // returning false lets the store's upNext logic play it (→ handoff streams it).
-    return !(st.upNext.length > 0 && !peerHasNext)
-  }
-  // Source side: a takeover stream already incoming → never start a competing one.
-  if (rx && !rx.done) return true
-  if (st.upNext.length > 0) return false // our own queue wins — store plays it
+  if (st.remote) return !(st.upNext.length > 0 && !peerHasNext)
+  if (livePlaySinkActive()) return true
+  if (st.upNext.length > 0) return false
   if (peerHasNext) {
-    // Peer's queued track takes the slot: hold here; their engine ends in lockstep
-    // and they stream it to us via the normal handoff.
     console.info('[listen] holding auto-advance — peer has the next track queued')
     return true
   }
   return false
 }
 
-// ============================================================ receiver side
+function livePlaySinkActive(): boolean {
+  const sink = rxByTransfer.get(currentTransferId)
+  return !!sink && sink.kind === 'play' && !sink.done
+}
+
+// ============================================================ receiver: prefetch
+function putCache(srcId: string, entry: Prepared): void {
+  if (prefetchCache.has(srcId)) {
+    prefetchCacheBytes -= prefetchCache.get(srcId)!.bytes.byteLength
+    prefetchCache.delete(srcId)
+  }
+  prefetchCache.set(srcId, entry)
+  prefetchCacheBytes += entry.bytes.byteLength
+  // LRU evict (oldest first) past either cap.
+  while (
+    prefetchCache.size > LISTEN_CACHE_MAX_ENTRIES ||
+    prefetchCacheBytes > LISTEN_CACHE_MAX_BYTES
+  ) {
+    const oldest = prefetchCache.keys().next().value as string | undefined
+    if (oldest === undefined || oldest === srcId) break
+    prefetchCacheBytes -= prefetchCache.get(oldest)!.bytes.byteLength
+    prefetchCache.delete(oldest)
+  }
+}
+
+/** Request the NEXT uncached horizon track — one at a time. Re-driven after each
+ *  prefetch completes/fails, so we never run competing background streams. */
+function drivePrefetch(): void {
+  if (!peer || role === 'source') return
+  if (requestedPrefetch.size > 0) return // one prefetch in flight at a time
+  const wanted = peerHorizonItems.slice(1, 1 + LISTEN_PREFETCH_COUNT)
+  for (const item of wanted) {
+    if (prefetchCache.has(item.srcId)) continue
+    if (item.size > LISTEN_MAX_TRANSFER) continue
+    requestedPrefetch.add(item.srcId)
+    peer.send({ t: 'fetch', srcId: item.srcId })
+    return
+  }
+}
+
+// ============================================================ receiver: play sinks
+function playFromBytes(
+  srcId: string,
+  container: string,
+  meta: RemoteTrackMeta,
+  size: number,
+  position: number,
+  playing: boolean,
+  bytes: Uint8Array
+): void {
+  if (currentBlobUrl) {
+    URL.revokeObjectURL(currentBlobUrl)
+    currentBlobUrl = null
+  }
+  const blob = new Blob([bytes as BlobPart], { type: mimeForContainer(container) })
+  currentBlobUrl = URL.createObjectURL(blob)
+  activateRemotePlayback(srcId, meta, size, position, playing)
+  engine.loadRemote(currentBlobUrl, position, playing)
+}
+
+function activateRemotePlayback(
+  srcId: string,
+  meta: RemoteTrackMeta,
+  size: number,
+  position: number,
+  playing: boolean
+): void {
+  role = 'receiver'
+  const track = synthTrack(`remote:${srcId}:${currentTransferId}`, meta, size)
+  applyingRemote = true
+  useLibrary.getState().setRemoteTrack(track)
+  usePlayer.setState({
+    currentTrackId: track.id,
+    duration: meta.durationSec ?? 0,
+    currentTime: position,
+    isPlaying: playing,
+    remote: true,
+    _relay: relay
+  })
+  applyingRemote = false
+  useListen.setState({ role: 'receiver' })
+}
+
+/** Start progressive playback via MediaSource; returns the sink's mse handle. */
+function startMse(sink: PlaySink): MseSink | null {
+  try {
+    const ms = new MediaSource()
+    const url = URL.createObjectURL(ms)
+    const mse: MseSink = { ms, url, sb: null, queue: [], wantEnd: false }
+    ms.addEventListener('sourceopen', () => {
+      try {
+        mse.sb = ms.addSourceBuffer(mimeForContainer(sink.container))
+        mse.sb.addEventListener('updateend', () => pumpMse(mse))
+        pumpMse(mse)
+      } catch (e) {
+        console.warn('[listen] MSE addSourceBuffer failed → blob fallback', e)
+        mse.sb = null
+      }
+    })
+    if (currentBlobUrl) URL.revokeObjectURL(currentBlobUrl)
+    currentBlobUrl = url
+    activateRemotePlayback(sink.srcId, sink.meta, sink.size, sink.position, sink.playing)
+    engine.loadRemote(url, sink.position, sink.playing)
+    return mse
+  } catch (e) {
+    console.warn('[listen] MSE start failed → blob fallback', e)
+    return null
+  }
+}
+
+function pumpMse(mse: MseSink): void {
+  if (!mse.sb || mse.sb.updating) return
+  const next = mse.queue.shift()
+  if (next) {
+    try {
+      mse.sb.appendBuffer(next as BufferSource)
+    } catch (e) {
+      console.warn('[listen] appendBuffer failed', e)
+    }
+    return
+  }
+  if (mse.wantEnd && mse.ms.readyState === 'open') {
+    try {
+      mse.ms.endOfStream()
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+// ============================================================ receiver: control
 function handleControl(m: ControlMsg): void {
   switch (m.t) {
     case 'ping':
@@ -366,17 +679,37 @@ function handleControl(m: ControlMsg): void {
       break
     }
     case 'load':
-      beginReceive(m)
+      onLoad(m)
+      break
+    case 'need':
+      void streamLive(m.transferId)
+      break
+    case 'have':
+      // Receiver already had it cached and is playing — nothing to send; keep syncing.
+      pendingLoads.delete(m.transferId)
+      sendState()
       break
     case 'loaded':
-      finalizeReceive(m.transferId)
+      finalizePlay(m.transferId)
       break
     case 'load-failed':
-      if (rx && rx.transferId === m.transferId) {
-        clearRxStall()
-        rx = null
-        useNotice.getState().show('The other Mac couldn’t send that track.')
-      }
+      onLoadFailed(m.transferId)
+      break
+    case 'fetch':
+      void handlePrefetchRequest(m.srcId)
+      break
+    case 'fetch-failed':
+      requestedPrefetch.delete(m.srcId)
+      drivePrefetch()
+      break
+    case 'prefetch':
+      onPrefetch(m)
+      break
+    case 'prefetch-done':
+      finalizePrefetch(m.transferId)
+      break
+    case 'xfer-abort':
+      dropSink(m.transferId)
       break
     case 'state':
       applyRemoteState(m)
@@ -387,75 +720,148 @@ function handleControl(m: ControlMsg): void {
     case 'queue-notice':
       applyQueueNotice(m)
       break
+    case 'horizon':
+      applyHorizon(m)
+      break
     case 'bye':
       teardown()
       break
   }
 }
 
-function beginReceive(m: Extract<ControlMsg, { t: 'load' }>): void {
+function onLoad(m: Extract<ControlMsg, { t: 'load' }>): void {
   clearRxStall()
-  // Validate the peer-declared size — a malicious/buggy peer could send a huge or
-  // nonsensical size to exhaust renderer memory (the whole file buffers before play).
   if (!Number.isFinite(m.size) || m.size < 0 || m.size > LISTEN_MAX_TRANSFER) {
-    rx = null
     useNotice.getState().show('Skipped a track that was too large to stream.')
+    peer?.send({ t: 'load-failed', transferId: m.transferId })
     return
   }
-  rx = {
+  // Retire any previous live sink.
+  const prev = rxByTransfer.get(currentTransferId)
+  if (prev && prev.kind === 'play') rxByTransfer.delete(currentTransferId)
+  currentTransferId = m.transferId
+
+  // Already prefetched? Play instantly, tell the source not to stream.
+  const cached = prefetchCache.get(m.srcId)
+  if (cached) {
+    console.info('[listen] playing prefetched track (instant):', m.meta.title)
+    peer?.send({ t: 'have', transferId: m.transferId })
+    playFromBytes(m.srcId, cached.container, m.meta, m.size, m.position, m.playing, cached.bytes)
+    return
+  }
+
+  peer?.send({ t: 'need', transferId: m.transferId })
+  const sink: PlaySink = {
+    kind: 'play',
     transferId: m.transferId,
+    srcId: m.srcId,
+    container: m.container,
     size: m.size,
     meta: m.meta,
     position: m.position,
     playing: m.playing,
-    chunks: [],
     received: 0,
+    chunks: [],
+    mse: null,
     done: false
   }
+  if (mseCapable(m.container)) sink.mse = startMse(sink)
+  rxByTransfer.set(m.transferId, sink)
   armRxStall()
 }
 
-function handleBytes(buf: ArrayBuffer): void {
-  if (!rx || rx.done) return
-  rx.chunks.push(new Uint8Array(buf))
-  rx.received += buf.byteLength
-  // A peer must never exceed the size it declared — abort if it overruns.
-  if (rx.received > rx.size) {
-    clearRxStall()
-    rx = null
-    return
-  }
-  if (rx.received === rx.size) {
-    finalizeReceive(rx.transferId)
-    return
-  }
-  armRxStall() // more to come — keep the stall watchdog alive
+function onPrefetch(m: Extract<ControlMsg, { t: 'prefetch' }>): void {
+  if (!Number.isFinite(m.size) || m.size < 0 || m.size > LISTEN_MAX_TRANSFER) return
+  rxByTransfer.set(m.transferId, {
+    kind: 'prefetch',
+    transferId: m.transferId,
+    srcId: m.srcId,
+    container: m.container,
+    size: m.size,
+    chunks: [],
+    received: 0
+  })
 }
 
-function finalizeReceive(transferId: number): void {
-  if (!rx || rx.transferId !== transferId || rx.done) return
-  clearRxStall()
-  rx.done = true
-  console.info('[listen] received track:', rx.meta.title, `(${rx.received} bytes) → playing`)
-  const blob = new Blob(rx.chunks as BlobPart[], { type: mimeFor(rx.meta.ext) })
-  if (currentBlobUrl) URL.revokeObjectURL(currentBlobUrl)
-  currentBlobUrl = URL.createObjectURL(blob)
+function handleBytes(transferId: number, buf: ArrayBuffer): void {
+  const sink = rxByTransfer.get(transferId)
+  if (!sink) return
+  const u8 = new Uint8Array(buf)
+  sink.received += u8.byteLength
+  if (sink.received > sink.size) {
+    // Overrun — drop it.
+    dropSink(transferId)
+    return
+  }
+  sink.chunks.push(u8)
+  if (sink.kind === 'play') {
+    if (sink.mse) {
+      sink.mse.queue.push(u8)
+      pumpMse(sink.mse)
+    }
+    if (transferId === currentTransferId) armRxStall()
+    if (sink.received === sink.size) finalizePlay(transferId)
+  } else {
+    if (sink.received === sink.size) finalizePrefetch(transferId)
+  }
+}
 
-  role = 'receiver'
-  const track = synthTrack(transferId, rx.meta, rx.size)
-  applyingRemote = true
-  useLibrary.getState().setRemoteTrack(track)
-  usePlayer.setState({
-    currentTrackId: track.id,
-    duration: rx.meta.durationSec ?? 0,
-    currentTime: rx.position,
-    isPlaying: rx.playing,
-    remote: true,
-    _relay: relay
-  })
-  applyingRemote = false
-  useListen.setState({ role: 'receiver' })
-  engine.loadRemote(currentBlobUrl, rx.position, rx.playing)
+function finalizePlay(transferId: number): void {
+  const sink = rxByTransfer.get(transferId)
+  if (!sink || sink.kind !== 'play' || sink.done) return
+  sink.done = true
+  clearRxStall()
+  const bytes = concatChunks(sink.chunks, sink.received)
+  // Cache the completed bytes so a re-pick / prefetch dedup hits.
+  putCache(sink.srcId, { bytes, container: sink.container })
+  if (sink.mse) {
+    sink.mse.wantEnd = true
+    pumpMse(sink.mse)
+  } else {
+    // Blob path (no MSE): now that all bytes are here, play.
+    playFromBytes(sink.srcId, sink.container, sink.meta, sink.size, sink.position, sink.playing, bytes)
+  }
+  console.info('[listen] received track:', sink.meta.title, `(${sink.received} bytes)`)
+}
+
+function finalizePrefetch(transferId: number): void {
+  const sink = rxByTransfer.get(transferId)
+  if (!sink || sink.kind !== 'prefetch') return
+  rxByTransfer.delete(transferId)
+  requestedPrefetch.delete(sink.srcId)
+  const bytes = concatChunks(sink.chunks, sink.received)
+  putCache(sink.srcId, { bytes, container: sink.container })
+  console.info('[listen] prefetched:', sink.srcId, `(${sink.received} bytes)`)
+  drivePrefetch() // fetch the next uncached horizon track
+}
+
+function onLoadFailed(transferId: number): void {
+  const sink = rxByTransfer.get(transferId)
+  if (sink && sink.kind === 'play') {
+    dropSink(transferId)
+    clearRxStall()
+    useNotice.getState().show('The other Mac couldn’t send that track.')
+  }
+}
+
+function dropSink(transferId: number): void {
+  const sink = rxByTransfer.get(transferId)
+  if (!sink) return
+  rxByTransfer.delete(transferId)
+  if (sink.kind === 'prefetch') requestedPrefetch.delete(sink.srcId)
+  if (sink.kind === 'play' && sink.mse && sink.mse.url === currentBlobUrl) {
+    // leave the URL; teardown/next load revokes it
+  }
+}
+
+function concatChunks(chunks: Uint8Array[], total: number): Uint8Array {
+  const out = new Uint8Array(total)
+  let off = 0
+  for (const c of chunks) {
+    out.set(c, off)
+    off += c.byteLength
+  }
+  return out
 }
 
 function applyRemoteState(m: Extract<ControlMsg, { t: 'state' }>): void {
@@ -465,7 +871,6 @@ function applyRemoteState(m: Extract<ControlMsg, { t: 'state' }>): void {
   applyingRemote = false
   if (m.playing) void engine.play()
   else engine.pause()
-  // Extrapolate the source's current position using the estimated clock offset.
   const sourceNow = performance.now() + clockOffset
   const elapsed = m.playing ? (sourceNow - m.atClock) / 1000 : 0
   const target = m.position + elapsed
@@ -491,12 +896,12 @@ function stopTimers(): void {
   connectTimer = undefined
 }
 
-// Receiver-side stall watchdog: abandon an in-progress transfer if bytes stop arriving.
 function armRxStall(): void {
   clearRxStall()
   rxStallTimer = window.setTimeout(() => {
-    if (rx && !rx.done) {
-      rx = null
+    const sink = rxByTransfer.get(currentTransferId)
+    if (sink && sink.kind === 'play' && !sink.done) {
+      dropSink(currentTransferId)
       useNotice.getState().show('The other Mac stopped sending the track.')
     }
   }, RX_STALL_MS)
@@ -523,7 +928,15 @@ function teardown(): void {
   const wasReceiver = role === 'receiver'
   role = 'idle'
   connectedPeer = null
-  rx = null
+  rxByTransfer.clear()
+  requestedPrefetch.clear()
+  prefetchCache.clear()
+  prefetchCacheBytes = 0
+  peerHorizonItems = []
+  srcCache.clear()
+  pendingLoads.clear()
+  lastHorizonKey = ''
+  prefetchAbort = true
   clockOffset = 0
   currentTransferId = 0
   peerHasNext = false
@@ -545,7 +958,14 @@ function teardown(): void {
   }
   applyingRemote = false
 
-  useListen.setState({ status: 'idle', peer: null, role: null, peerQueue: [] })
+  useListen.setState({
+    status: 'idle',
+    peer: null,
+    role: null,
+    peerQueue: [],
+    peerHorizon: [],
+    incoming: null // a caller that bailed shouldn't leave a stale Allow/Deny prompt up
+  })
 }
 
 // ============================================================ simulation fallback
@@ -559,25 +979,28 @@ function clearSim(): void {
 }
 
 // ============================================================ public API (store → session)
-export async function start(): Promise<{
-  name: string
-  pin: string
-  addresses: string[]
-} | null> {
+export async function start(): Promise<{ name: string; addresses: string[] } | null> {
   if (!hasNative) {
-    return {
-      name: 'This Mac',
-      pin: String(Math.floor(100000 + Math.random() * 900000)),
-      addresses: ['192.168.1.42']
-    }
+    return { name: 'This Mac', addresses: ['192.168.1.42'] }
   }
   initNative()
   try {
     const info = await window.api.listen.start()
-    return { name: info.name, pin: info.pin, addresses: info.addresses }
+    return { name: info.name, addresses: info.addresses }
   } catch {
     return null
   }
+}
+
+/** Callee answers an incoming request. */
+export function respondIncoming(accept: boolean, trust: boolean): void {
+  if (hasNative) void window.api.listen.respondIncoming(accept, trust)
+  useListen.setState({ incoming: null })
+}
+
+/** Forget all trusted devices. */
+export function forgetTrusted(): void {
+  if (hasNative) void window.api.listen.forgetTrusted()
 }
 
 export function stop(): void {
@@ -594,14 +1017,13 @@ export function discover(): void {
       }
     }, 1400)
   }
-  // Native: peers already stream in via onPeers.
 }
 
 export function stopDiscovery(): void {
   clearSim()
 }
 
-export function connect(p: ListenPeer, pin: string): void {
+export function connect(p: ListenPeer): void {
   if (!hasNative) {
     clearSim()
     simConnect = window.setTimeout(() => {
@@ -611,17 +1033,17 @@ export function connect(p: ListenPeer, pin: string): void {
     }, 900)
     return
   }
-  void window.api.listen.connect(p.id, pin).then((r) => {
+  void window.api.listen.connect(p.id).then((r) => {
     if (!r.ok) onSignalError({ reason: r.error ?? 'peer-gone', message: r.error ?? '' })
   })
 }
 
-export function connectManual(host: string, pin: string): void {
+export function connectManual(host: string): void {
   if (!hasNative) {
-    connect({ id: `manual:${host}`, name: host }, pin)
+    connect({ id: `manual:${host}`, name: host })
     return
   }
-  void window.api.listen.connectManual(host, pin).then((r) => {
+  void window.api.listen.connectManual(host).then((r) => {
     if (!r.ok) onSignalError({ reason: r.error ?? 'network', message: r.error ?? '' })
   })
 }
@@ -636,8 +1058,8 @@ export function disconnect(): void {
   teardown()
 }
 
-// Detect local playback to drive the source side. Registered once at module load;
-// no-ops until a session is connected.
 usePlayer.subscribe(onPlayerChange)
-// Queue coordination hook — the gate no-ops until a session is connected.
 usePlayer.setState({ _queueGate: queueGate })
+// Subscribe to native listen events at startup so incoming requests (incl. trusted
+// auto-connects) are handled even before the user opens the Connect panel.
+initNative()

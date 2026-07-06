@@ -1,10 +1,36 @@
-import { useEffect, type JSX } from 'react'
+import { useEffect, useState, type JSX } from 'react'
 import { useSettings, LAYOUTS, type LayoutPreset } from '../state/settings-store'
 import { useLibrary } from '../state/library-store'
 import { useUpdates } from '../state/updates-store'
+import { useListen } from '../state/listen-store'
 import { UpdateButton } from './UpdateButton'
 import { CloseIcon, CheckIcon } from './Icons'
 import { pluralize } from '../lib/format'
+
+/** "Forget trusted devices" row — clears every remembered peer for Listen Together. */
+function ForgetTrustedRow(): JSX.Element {
+  const forgetTrusted = useListen((s) => s.forgetTrusted)
+  const [done, setDone] = useState(false)
+  return (
+    <button
+      className="setting-row"
+      onClick={() => {
+        forgetTrusted()
+        setDone(true)
+      }}
+    >
+      <span className="setting-text">
+        <span className="setting-label">Forget trusted devices</span>
+        <span className="setting-hint">
+          {done
+            ? 'Cleared — each device will ask again next time.'
+            : 'Remembered Macs connect without asking. Clear them to require approval again.'}
+        </span>
+      </span>
+      <span className="setting-action">{done ? 'Done' : 'Forget'}</span>
+    </button>
+  )
+}
 
 function Toggle({
   checked,
@@ -68,6 +94,8 @@ export function SettingsPanel(): JSX.Element | null {
   const setResumeLastTrack = useSettings((s) => s.setResumeLastTrack)
   const exclusiveMediaKeys = useSettings((s) => s.exclusiveMediaKeys)
   const setExclusiveMediaKeys = useSettings((s) => s.setExclusiveMediaKeys)
+  const compressTransfers = useSettings((s) => s.compressTransfers)
+  const setCompressTransfers = useSettings((s) => s.setCompressTransfers)
 
   const rootName = useLibrary((s) => s.rootName)
   const trackCount = useLibrary((s) => s.tracksById.size)
@@ -142,6 +170,13 @@ export function SettingsPanel(): JSX.Element | null {
               label="Exclusive media keys"
               hint="Route ⏮ ⏯ ⏭ (F7/F8/F9) only to Folderify — other apps can't take them while this is on. macOS may ask for Accessibility access."
             />
+            <Toggle
+              checked={compressTransfers}
+              onChange={setCompressTransfers}
+              label="Compress Listen Together transfers"
+              hint="Re-encode lossless (FLAC/WAV) tracks smaller before streaming to a friend — much faster, at ~192 kbps. Your library files are never changed. Off = send the original."
+            />
+            <ForgetTrustedRow />
           </section>
 
           <section className="settings-section">

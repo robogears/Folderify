@@ -43,26 +43,63 @@ export interface QueueItem {
   artist: string
 }
 
-/** Control-channel protocol, renderer ↔ renderer over the data channel. */
+/** One upcoming track in the source's play order (manual queue + context). */
+export interface HorizonItem {
+  /** Source-local track id — the cache/prefetch key. Never a path. */
+  srcId: string
+  title: string
+  artist: string
+  durationSec: number | null
+  /** ORIGINAL file size (display/budgeting; a transcoded transfer may be smaller). */
+  size: number
+  ext: string
+}
+
+/**
+ * Control-channel protocol, renderer ↔ renderer over the data channel.
+ *
+ * Transfers are TAGGED: every binary frame carries a 4-byte LE transferId header
+ * (LISTEN_FRAME_HEADER), so a live track and background prefetches can interleave.
+ * `load` = "switch playback to this now" (receiver replies `need` or `have`);
+ * `prefetch` = "bytes you asked for via `fetch`, cache them for later".
+ */
 export type ControlMsg =
   | { t: 'ping'; t0: number }
   | { t: 'pong'; t0: number; t1: number }
   | {
       t: 'load'
       transferId: number
+      srcId: string
+      /** Size of the TRANSFER bytes (transcoded size when compressed). */
       size: number
+      /** Container of the transfer bytes ('mp3', 'webm', …) — not always the track ext. */
+      container: string
       meta: RemoteTrackMeta
       position: number
       playing: boolean
     }
+  /** Receiver → source: I don't have it, stream the bytes. */
+  | { t: 'need'; transferId: number }
+  /** Receiver → source: cached from a prefetch — skip streaming entirely. */
+  | { t: 'have'; transferId: number }
   | { t: 'loaded'; transferId: number }
   | { t: 'load-failed'; transferId: number }
+  /** Receiver → source: please background-stream this horizon track. */
+  | { t: 'fetch'; srcId: string }
+  | { t: 'fetch-failed'; srcId: string }
+  /** Source → receiver: header for prefetch bytes tagged `transferId`. */
+  | { t: 'prefetch'; transferId: number; srcId: string; size: number; container: string }
+  | { t: 'prefetch-done'; transferId: number }
+  /** Either direction: transfer was preempted/cancelled — drop its partial bytes. */
+  | { t: 'xfer-abort'; transferId: number }
   | { t: 'state'; playing: boolean; position: number; atClock: number; transferId: number }
   | { t: 'command'; cmd: 'play' | 'pause' | 'seek'; value?: number }
   /** Sent whenever a side's up-next queue changes: what THAT side has queued.
    *  Coordinates whose track takes the next slot (source's queue wins) and lets
    *  the peer render the shared "Up next" view. */
   | { t: 'queue-notice'; items: QueueItem[] }
+  /** Source → receiver: the next ~20 tracks in play order (drives display + prefetch). */
+  | { t: 'horizon'; items: HorizonItem[] }
   | { t: 'bye' }
 
 /** LAN discovery beacon group + port (link-local multicast, TTL 1). */
@@ -71,12 +108,22 @@ export const LISTEN_MULTICAST_PORT = 50777
 /** Preferred fixed TCP signaling port, so "connect by IP" knows where to reach a peer
  *  even when multicast discovery is blocked. Falls back to an ephemeral port if taken. */
 export const LISTEN_SIG_PORT = 50778
-/** Max bytes per data-channel binary send (SCTP-safe portable chunk size). */
-export const LISTEN_CHUNK_SIZE = 16 * 1024
+/** Max PAYLOAD bytes per data-channel binary frame. Both ends are Chromium (SCTP max
+ *  message ~256 KB), so 64 KB is safe and ~3× faster than the old 16 KB. */
+export const LISTEN_CHUNK_SIZE = 64 * 1024
+/** Bytes of transfer-id header prepended to every binary frame (uint32 LE). */
+export const LISTEN_FRAME_HEADER = 4
 /** Hard ceiling on a single streamed track (the whole file buffers in renderer memory
  *  before playback). Larger than any real audio file; caps a malicious/buggy peer that
  *  declares a huge `size` and streams forever. 1 GiB. */
 export const LISTEN_MAX_TRANSFER = 1024 * 1024 * 1024
+/** How many upcoming tracks the source broadcasts in its horizon. */
+export const LISTEN_HORIZON_COUNT = 20
+/** How many upcoming tracks the receiver keeps pre-downloaded. */
+export const LISTEN_PREFETCH_COUNT = 5
+/** Receiver prefetch-cache caps (LRU eviction past either limit). */
+export const LISTEN_CACHE_MAX_ENTRIES = 8
+export const LISTEN_CACHE_MAX_BYTES = 256 * 1024 * 1024
 
 /** Identity + reachability returned when advertising starts. */
 export interface ListenIdentity {

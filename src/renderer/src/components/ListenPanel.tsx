@@ -3,31 +3,30 @@ import { useListen } from '../state/listen-store'
 import { CloseIcon } from './Icons'
 
 /**
- * The Connect / "Listen together" modal. Sibling of SettingsPanel — same self-gating,
- * Escape/backdrop-to-close contract. Driven entirely by the listen-store state machine;
- * the networking backend is stubbed there (see docs/listen-together-design.md).
+ * The Connect / "Listen together" modal. Pairing is approval-based (no PIN): click a
+ * discovered device → the other Mac gets an Allow/Deny prompt and can trust you forever.
+ * Sibling of SettingsPanel — same Escape/backdrop-to-close contract.
  */
 export function ListenPanel(): JSX.Element | null {
   const open = useListen((s) => s.panelOpen)
   const close = useListen((s) => s.closePanel)
   const status = useListen((s) => s.status)
   const deviceName = useListen((s) => s.deviceName)
-  const pin = useListen((s) => s.pin)
   const localAddresses = useListen((s) => s.localAddresses)
   const peers = useListen((s) => s.peers)
   const peer = useListen((s) => s.peer)
+  const incoming = useListen((s) => s.incoming)
   const role = useListen((s) => s.role)
   const error = useListen((s) => s.error)
   const startDiscovery = useListen((s) => s.startDiscovery)
   const stopDiscovery = useListen((s) => s.stopDiscovery)
-  const selectPeer = useListen((s) => s.selectPeer)
+  const connectToPeer = useListen((s) => s.connectToPeer)
   const connectByIp = useListen((s) => s.connectByIp)
-  const confirmPairing = useListen((s) => s.confirmPairing)
-  const cancelPairing = useListen((s) => s.cancelPairing)
+  const respondIncoming = useListen((s) => s.respondIncoming)
   const disconnect = useListen((s) => s.disconnect)
 
-  const [entered, setEntered] = useState('')
   const [manualIp, setManualIp] = useState('')
+  const [trust, setTrust] = useState(true)
 
   useEffect(() => {
     if (!open) return
@@ -37,11 +36,6 @@ export function ListenPanel(): JSX.Element | null {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [open, close])
-
-  // Clear the typed code whenever we leave the pairing step.
-  useEffect(() => {
-    if (status !== 'pairing') setEntered('')
-  }, [status])
 
   if (!open) return null
 
@@ -56,7 +50,40 @@ export function ListenPanel(): JSX.Element | null {
         </header>
 
         <div className="listen-body">
-          {status === 'idle' && (
+          {/* Incoming request takes over the panel until answered. */}
+          {incoming ? (
+            <>
+              <p className="listen-lead">
+                <strong>{incoming.name}</strong> wants to listen together.
+              </p>
+              <p className="listen-hint">
+                They&rsquo;ll be able to hear music you play, and play songs from their own
+                library to you.
+              </p>
+              <button
+                className="setting-row listen-trust-row"
+                onClick={() => setTrust((t) => !t)}
+                role="switch"
+                aria-checked={trust}
+              >
+                <span className="setting-text">
+                  <span className="setting-label">Trust this device</span>
+                  <span className="setting-hint">Let it connect again without asking.</span>
+                </span>
+                <span className={`switch ${trust ? 'is-on' : ''}`}>
+                  <span className="switch-knob" />
+                </span>
+              </button>
+              <div className="listen-actions">
+                <button className="btn-ghost" onClick={() => respondIncoming(false, false)}>
+                  Deny
+                </button>
+                <button className="listen-cta" onClick={() => respondIncoming(true, trust)}>
+                  Allow
+                </button>
+              </div>
+            </>
+          ) : status === 'idle' ? (
             <>
               <p className="listen-lead">
                 Play in sync with someone on your Wi-Fi. Pick a song on either Mac and
@@ -73,22 +100,16 @@ export function ListenPanel(): JSX.Element | null {
                     <span className="settings-info-v">{localAddresses[0]}</span>
                   </div>
                 )}
-                <div className="settings-info-row">
-                  <span className="settings-info-k">Pairing code</span>
-                  <span className="settings-info-v listen-pin">{pin}</span>
-                </div>
               </div>
               <p className="listen-hint">
-                Share this code (and IP, if needed) so the other Mac can connect to you.
+                Find the other Mac below, or share your IP so they can connect to you.
               </p>
               {error && <p className="listen-error">{error}</p>}
               <button className="listen-cta" onClick={startDiscovery}>
                 Find nearby devices
               </button>
             </>
-          )}
-
-          {status === 'discovering' && (
+          ) : status === 'discovering' ? (
             <>
               <div className="listen-row-head">
                 <span className="listen-section-title">Nearby devices</span>
@@ -99,11 +120,7 @@ export function ListenPanel(): JSX.Element | null {
               ) : (
                 <div className="listen-peers">
                   {peers.map((pr) => (
-                    <button
-                      key={pr.id}
-                      className="listen-peer"
-                      onClick={() => selectPeer(pr)}
-                    >
+                    <button key={pr.id} className="listen-peer" onClick={() => connectToPeer(pr)}>
                       <span className="listen-peer-name">{pr.name}</span>
                       <span className="listen-peer-go">Connect</span>
                     </button>
@@ -130,7 +147,7 @@ export function ListenPanel(): JSX.Element | null {
                     disabled={!manualIp.trim()}
                     onClick={() => connectByIp(manualIp)}
                   >
-                    Connect by IP
+                    Connect
                   </button>
                 </div>
               </div>
@@ -139,53 +156,22 @@ export function ListenPanel(): JSX.Element | null {
                 Stop
               </button>
             </>
-          )}
-
-          {status === 'pairing' && peer && (
-            <>
-              <p className="listen-lead">
-                Connect to <strong>{peer.name}</strong>
-              </p>
-              <input
-                className="listen-pin-input"
-                inputMode="numeric"
-                placeholder="000000"
-                maxLength={6}
-                value={entered}
-                autoFocus
-                onChange={(e) => setEntered(e.target.value.replace(/\D/g, ''))}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') confirmPairing(entered)
-                }}
-              />
-              <p className="listen-hint">Enter the 6-digit code shown on {peer.name}.</p>
-              {error && <p className="listen-error">{error}</p>}
-              <div className="listen-actions">
-                <button className="btn-ghost" onClick={cancelPairing}>
-                  Back
-                </button>
-                <button className="listen-cta" onClick={() => confirmPairing(entered)}>
-                  Connect
-                </button>
-              </div>
-            </>
-          )}
-
-          {status === 'connecting' && (
+          ) : status === 'connecting' ? (
             <div className="listen-center">
               <span className="listen-spinner listen-spinner-lg" aria-hidden="true" />
-              <p className="listen-hint">Connecting{peer ? ` to ${peer.name}` : ''}…</p>
+              <p className="listen-hint">
+                Waiting for {peer?.name ?? 'the other Mac'} to accept…
+              </p>
+              <button className="btn-ghost" onClick={disconnect}>
+                Cancel
+              </button>
             </div>
-          )}
-
-          {status === 'connected' && (
+          ) : status === 'connected' ? (
             <>
               <div className="listen-connected">
                 <span className="listen-dot" aria-hidden="true" />
                 <div className="listen-connected-text">
-                  <span className="listen-connected-name">
-                    Connected to {peer?.name ?? 'device'}
-                  </span>
+                  <span className="listen-connected-name">Connected to {peer?.name ?? 'device'}</span>
                   <span className="listen-hint">
                     {role === 'source'
                       ? 'You’re in control — pick a song and it plays on both.'
@@ -199,12 +185,12 @@ export function ListenPanel(): JSX.Element | null {
                 Disconnect
               </button>
             </>
-          )}
+          ) : null}
         </div>
 
         <footer className="listen-footer">
           <span className="listen-note">
-            Both Macs need Folderify open on the same Wi-Fi. Audio is sent peer-to-peer and encrypted.
+            Both Macs need Folderify on the same Wi-Fi. Audio is sent peer-to-peer and encrypted.
           </span>
         </footer>
       </div>

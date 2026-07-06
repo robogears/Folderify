@@ -424,24 +424,54 @@ the receiver plays its own copy, kept in lockstep by a clock-synced control prot
   `239.255.71.14:50777`, TTL 1). Each instance announces `{id, name, sigPort}` every 2s; peers age
   out after ~6.5s. Simpler than mDNS and both ends are Folderify.
 - **Signaling** (`src/main/listen/signaling.ts`) — a `net` TCP relay (newline-delimited JSON). The
-  caller connects to the peer's advertised `sigPort`, sends `hello{pin}`; the callee validates the
-  PIN against its own advertised code (**the PIN _is_ the pairing approval**), then relays SDP/ICE.
-  One active connection at a time.
-- **`src/main/listen/index.ts`** — wires the two, owns identity (`randomUUID` id, hostname, 6-digit
-  PIN), exposes IPC (`listen:start/connect/disconnect/stop` + `listen:signal`) and pushes
-  `listen:peers/connected/signal/error/disconnected`. Registered in `main/index.ts` startup;
-  torn down on `before-quit`.
+  caller connects to the peer's advertised `sigPort`, sends `hello{id, name}` (**no PIN**); the
+  callee **auto-accepts if the id is trusted**, else holds the socket as `pending` and fires
+  `onIncoming(peer)` so the UI can prompt Allow/Deny (`respond(accept)` accepts or rejects; 30s
+  `APPROVE_TIMEOUT_MS`). One active connection at a time; a pending caller that disconnects fires
+  `onClosed()` so the prompt clears.
+- **`src/main/listen/index.ts`** — wires the two, owns a **persistent identity**
+  (`listen-identity.json`: stable `randomUUID` id so peers can trust this Mac across sessions +
+  hostname) and a **trusted-peer store** (`listen-trusted.json`, id→name). Exposes IPC
+  (`listen:start/connect/connect-manual/respond/forget-trusted/disconnect/stop/signal/read-track`)
+  and pushes `listen:peers/incoming/connected/signal/error/disconnected`. **Net (discovery +
+  signaling) runs for the app's whole lifetime** — started at `registerListen` (not just when the
+  panel opens) so a **trusted peer can connect whenever Folderify is running**, no panel needed;
+  `listen:stop` only drops the live connection. Torn down on `before-quit`.
+  `listen:read-track` reads a track's bytes for the source to stream (main owns disk; confined to
+  root via `safeResolveUnder`, ≤`LISTEN_MAX_TRANSFER`) — the source reads over IPC, **not** a
+  renderer `fetch('media://…')`, which fails cross-scheme in a packaged app.
 - **WebRTC** lives in the **renderer**: `src/renderer/src/listen/peer.ts` (one `RTCPeerConnection`,
   **one** data channel carrying both JSON control frames and binary audio — string vs ArrayBuffer
   discriminates, so `load` can't race the bytes it describes; `iceServers: []` since host
   candidates connect on a LAN). `main/index.ts` sets `disable-features=WebRtcHideLocalIpsWithMdns`
   so ICE candidates carry real LAN IPs.
-- **Protocol brain**: `src/renderer/src/listen/session.ts`. Source `fetch()`es its own `media://`
-  bytes → chunks (16KB, backpressure) → peer; receiver reassembles → **Blob URL** →
-  `engine.loadRemote()`. Sync = authoritative-source `state{position, atClock}` + ping/pong clock
-  offset, drift-corrected past 0.4s. Whoever picks a track becomes the source (two-way handoff);
-  receiver play/pause/seek relay to the source. Falls back to a **local simulation** when
-  `window.api.listen` is absent (browser harness / non-Electron), so the UI still works.
+- **Protocol brain**: `src/renderer/src/listen/session.ts`. Source reads its own bytes via
+  `listen:read-track` → optionally transcodes → chunks (64KB, backpressure, **4-byte LE transferId
+  frame header** so multiple transfers interleave) → peer; receiver reassembles per-transfer →
+  **MSE** (mp3/webm, progressive) or **Blob URL** fallback → `engine.loadRemote()`. Sync =
+  authoritative-source `state{position, atClock}` + ping/pong clock offset, drift-corrected past
+  0.4s. Whoever picks a track becomes the source (two-way handoff); receiver play/pause/seek relay
+  to the source. Falls back to a **local simulation** when `window.api.listen` is absent (browser
+  harness / non-Electron), so the UI still works.
+- **Faster transfers (transcode + progressive + prefetch)** — three layers, all opt-outable via the
+  `compressTransfers` setting (default on; the library files are **never touched** — everything is
+  an in-memory copy):
+  - **Transcode** (`transcode.ts` + `webm-muxer.ts`): lossless FLAC/WAV → **Opus/WebM ~192 kbps**
+    entirely in memory (`OfflineAudioContext.decodeAudioData` → WebCodecs `AudioEncoder` → a
+    hand-rolled zero-dep EBML/Matroska muxer). ~86% smaller, faster-than-realtime. Feature-checked;
+    any failure falls back to sending the original bytes. Skipped for already-compressed formats.
+  - **Progressive playback (MSE)**: mp3 + webm/opus stream into a `MediaSource`/`SourceBuffer` so
+    playback can start before the whole file arrives; other containers use the Blob-URL path.
+  - **Prefetch horizon**: the source broadcasts a `horizon` (next ~`LISTEN_HORIZON_COUNT` tracks);
+    the receiver prefetches the next few over `fetch`/`prefetch` control frames into an **LRU cache**
+    (`LISTEN_CACHE_MAX_ENTRIES`/`LISTEN_CACHE_MAX_BYTES`), serialized one-in-flight. A cached track a
+    listener skips to plays **instantly** (`have` → play from cache; else `need` → live stream).
+- **Pairing UI** (`ListenPanel.tsx` + `listen-store.ts`): **approval-based, no PIN**. Click a
+  discovered device (or type its IP) → `connectToPeer`/`connectByIp` → the other Mac shows an
+  Allow/Deny prompt (`incoming` in the store, driven by `listen:incoming`) with a **"Trust this
+  device"** toggle; `respondIncoming(accept, trust)` persists trust when checked. Trusted devices
+  auto-connect thereafter (`onConnected` auto-opens the panel to show the live session). Settings →
+  Playback has **Forget trusted devices** (`forgetTrusted`).
 - **Receiver rendering**: a **synthetic `Track`** (id `remote:*`) is injected into
   `library-store` (`setRemoteTrack`) so NowPlayingBar/SeekBar/tray/MediaSession render the streamed
   track with no other UI changes. `player-store` gains `remote` + `_relay` (transport guards; never
@@ -467,8 +497,9 @@ the receiver plays its own copy, kept in lockstep by a clock-synced control prot
   kills the connection) and ignores transient `disconnected`. `console.info('[listen] …')` traces
   every hop (ICE state, channel open, transfer start/finish) for device debugging.
 - **Still needs two-Mac device testing** (can't be exercised in one process) and **no receiver
-  cover art yet** (synthetic track `hasArt:false` → placeholder). To be discoverable/connectable a
-  Mac must have the Connect panel open.
+  cover art yet** (synthetic track `hasArt:false` → placeholder). A Mac is discoverable/connectable
+  whenever Folderify is **running** (net is app-lifetime, not panel-gated) — trusted peers connect
+  with no interaction; untrusted ones auto-open the Allow/Deny prompt.
 
 ---
 

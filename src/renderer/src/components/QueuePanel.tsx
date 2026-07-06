@@ -32,6 +32,7 @@ export function QueuePanel(): JSX.Element | null {
   const connected = useListen((s) => s.status === 'connected')
   const peerName = useListen((s) => s.peer?.name ?? 'them')
   const peerQueue = useListen((s) => s.peerQueue)
+  const peerHorizon = useListen((s) => s.peerHorizon)
 
   useEffect(() => {
     if (!open) return
@@ -131,6 +132,23 @@ export function QueuePanel(): JSX.Element | null {
               <div className="queue-list">
                 {peerQueue.map((it, i) => (
                   <div className="queue-row is-peer" key={i}>
+                    <div className="queue-art queue-art-peer" aria-hidden="true" />
+                    <div className="queue-row-text">
+                      <span className="queue-row-title">{it.title}</span>
+                      <span className="queue-row-artist">{it.artist}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {connected && peerHorizon.length > 1 && (
+            <section className="queue-section">
+              <span className="queue-section-title">Coming up from {peerName}</span>
+              <div className="queue-list">
+                {peerHorizon.slice(1).map((it, i) => (
+                  <div className="queue-row is-peer" key={`${it.srcId}-${i}`}>
                     <div className="queue-art queue-art-peer" aria-hidden="true" />
                     <div className="queue-row-text">
                       <span className="queue-row-title">{it.title}</span>

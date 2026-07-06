@@ -15,13 +15,17 @@ export type Unsubscribe = () => void
 /** Listen Together — LAN discovery + WebRTC signaling relay (see shared/listen.ts). */
 export interface FolderifyListenApi {
   /** Start advertising + discovery + signaling; resolves with our identity, LAN IPs, sig port. */
-  start(): Promise<{ id: string; name: string; pin: string; addresses: string[]; sigPort: number }>
+  start(): Promise<{ id: string; name: string; addresses: string[]; sigPort: number }>
   /** Stop advertising/discovery and tear down any connection. */
   stop(): Promise<{ ok: boolean }>
-  /** Reach out to a discovered peer, presenting their PIN. */
-  connect(peerId: string, pin: string): Promise<{ ok: boolean; error?: string }>
+  /** Reach out to a discovered peer (the peer approves, or auto-accepts if trusted). */
+  connect(peerId: string): Promise<{ ok: boolean; error?: string }>
   /** Reach out to a peer by typed IP (fixed sig port) when discovery didn't surface it. */
-  connectManual(host: string, pin: string): Promise<{ ok: boolean; error?: string }>
+  connectManual(host: string): Promise<{ ok: boolean; error?: string }>
+  /** Answer an incoming connection request (Allow/Deny, and whether to trust it forever). */
+  respondIncoming(accept: boolean, trust: boolean): Promise<{ ok: boolean }>
+  /** Forget all trusted devices (they'll be re-prompted next time). */
+  forgetTrusted(): Promise<{ ok: boolean }>
   /** Drop the current connection (keeps advertising). */
   disconnect(): Promise<{ ok: boolean }>
   /** Send a WebRTC SDP/ICE payload to the connected peer (relayed by main). */
@@ -29,6 +33,8 @@ export interface FolderifyListenApi {
   /** Read a track's bytes (confined to the library root) for the source to stream. */
   readTrack(path: string): Promise<ArrayBuffer | null>
   onPeers(cb: (peers: ListenPeer[]) => void): Unsubscribe
+  /** A not-yet-trusted peer is asking to connect — show the Allow/Deny prompt. */
+  onIncoming(cb: (peer: ListenPeer) => void): Unsubscribe
   onConnected(cb: (c: ListenConnected) => void): Unsubscribe
   onSignal(cb: (payload: SignalPayload) => void): Unsubscribe
   onError(cb: (e: ListenErrorPayload) => void): Unsubscribe

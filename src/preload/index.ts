@@ -48,13 +48,16 @@ const api: FolderifyApi = {
   listen: {
     start: () => ipcRenderer.invoke('listen:start'),
     stop: () => ipcRenderer.invoke('listen:stop'),
-    connect: (peerId: string, pin: string) => ipcRenderer.invoke('listen:connect', { peerId, pin }),
-    connectManual: (host: string, pin: string) =>
-      ipcRenderer.invoke('listen:connect-manual', { host, pin }),
+    connect: (peerId: string) => ipcRenderer.invoke('listen:connect', { peerId }),
+    connectManual: (host: string) => ipcRenderer.invoke('listen:connect-manual', { host }),
+    respondIncoming: (accept: boolean, trust: boolean) =>
+      ipcRenderer.invoke('listen:respond', { accept, trust }),
+    forgetTrusted: () => ipcRenderer.invoke('listen:forget-trusted'),
     disconnect: () => ipcRenderer.invoke('listen:disconnect'),
     sendSignal: (payload: SignalPayload) => ipcRenderer.send('listen:signal', payload),
     readTrack: (path: string) => ipcRenderer.invoke('listen:read-track', path),
     onPeers: (cb: (peers: ListenPeer[]) => void) => subscribe('listen:peers', cb),
+    onIncoming: (cb: (peer: ListenPeer) => void) => subscribe('listen:incoming', cb),
     onConnected: (cb: (c: ListenConnected) => void) => subscribe('listen:connected', cb),
     onSignal: (cb: (p: SignalPayload) => void) => subscribe('listen:signal', cb),
     onError: (cb: (e: ListenErrorPayload) => void) => subscribe('listen:error', cb),

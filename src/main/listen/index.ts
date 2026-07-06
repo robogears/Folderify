@@ -1,30 +1,27 @@
-// Wires LAN discovery + the signaling relay together and exposes them to the
-// renderer over IPC. WebRTC itself lives in the renderer (Chromium); main only
-// discovers peers and relays the PIN handshake + SDP/ICE. See the Listen section
-// of docs/listen-together-design.md.
+// Wires LAN discovery + the signaling relay together and exposes them to the renderer
+// over IPC. WebRTC itself lives in the renderer (Chromium); main only discovers peers,
+// runs the APPROVAL pairing handshake (no PIN — trusted ids auto-accept, unknown ones
+// prompt the user), and relays SDP/ICE. See docs/listen-together-design.md.
 
-import { ipcMain, type BrowserWindow } from 'electron'
+import { app, ipcMain, type BrowserWindow } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
+import { readFileSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
+import path from 'node:path'
 import { Discovery } from './discovery'
 import { Signaling } from './signaling'
 import { safeResolveUnder } from '../path-safety'
-import { LISTEN_MAX_TRANSFER, LISTEN_SIG_PORT } from '../../shared/listen'
+import { LISTEN_MAX_TRANSFER, LISTEN_SIG_PORT, type ListenPeer } from '../../shared/listen'
 
 interface Identity {
   id: string
   name: string
-  pin: string
 }
 
 function friendlyHostName(): string {
   const h = os.hostname().replace(/\.local$/i, '').trim()
   return h || 'Mac'
-}
-
-function genPin(): string {
-  return String(Math.floor(100000 + Math.random() * 900000))
 }
 
 /** This Mac's non-internal IPv4 addresses (for "connect by IP" when discovery fails). */
@@ -47,9 +44,47 @@ export function registerListen(
     if (w && !w.isDestroyed()) w.webContents.send(channel, payload)
   }
 
-  // Read the bytes of a track for the source to stream to its peer. Main owns disk
-  // access, so this avoids the renderer fetch('media://…') cross-scheme path that
-  // failed in the field. Path is confined to the library root, same as media://.
+  // ── Persistent identity (stable id so peers can trust this Mac across sessions) ──
+  const identityFile = (): string => path.join(app.getPath('userData'), 'listen-identity.json')
+  function loadOrCreateId(): string {
+    try {
+      const j = JSON.parse(readFileSync(identityFile(), 'utf8')) as { id?: string }
+      if (typeof j.id === 'string' && j.id) return j.id
+    } catch {
+      /* first run */
+    }
+    const id = randomUUID()
+    try {
+      writeFileSync(identityFile(), JSON.stringify({ id }))
+    } catch {
+      /* ignore */
+    }
+    return id
+  }
+
+  // ── Trusted peers (id → name). A trusted id auto-accepts; others prompt. ──
+  const trustFile = (): string => path.join(app.getPath('userData'), 'listen-trusted.json')
+  const trusted = new Map<string, string>()
+  function loadTrusted(): void {
+    try {
+      const j = JSON.parse(readFileSync(trustFile(), 'utf8')) as { peers?: { id?: string; name?: string }[] }
+      if (Array.isArray(j.peers)) for (const p of j.peers) if (p?.id) trusted.set(String(p.id), String(p.name ?? ''))
+    } catch {
+      /* none yet */
+    }
+  }
+  function saveTrusted(): void {
+    try {
+      writeFileSync(
+        trustFile(),
+        JSON.stringify({ peers: [...trusted].map(([id, name]) => ({ id, name })) })
+      )
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // Read a track's bytes for the source to stream (main owns disk; confined to root).
   ipcMain.handle('listen:read-track', async (_e, p: unknown) => {
     const root = getRoot()
     if (!root || typeof p !== 'string' || !p) return null
@@ -58,7 +93,6 @@ export function registerListen(
     try {
       const buf = await readFile(safe)
       if (buf.byteLength > LISTEN_MAX_TRANSFER) return null
-      // Return a standalone ArrayBuffer (Buffer's may be a shared pool slice).
       return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
     } catch {
       return null
@@ -68,7 +102,8 @@ export function registerListen(
   let discovery: Discovery | undefined
   let signaling: Signaling | undefined
   let sigPort = 0
-  let identity: Identity = { id: '', name: friendlyHostName(), pin: '' }
+  let identity: Identity = { id: '', name: friendlyHostName() }
+  let netStarted: Promise<void> | null = null
 
   function teardownNet(): void {
     signaling?.stop()
@@ -76,74 +111,89 @@ export function registerListen(
     discovery?.stop()
     discovery = undefined
     sigPort = 0
+    netStarted = null
   }
 
-  // Start advertising + browsing + the signaling server. Idempotent; returns our
-  // identity (name, the PIN the other Mac must enter, our LAN IPs, and the sig port).
+  // Advertise + browse + run signaling for the app's lifetime — so a TRUSTED peer can
+  // connect whenever this Mac is running (no need to open the panel first), and an
+  // untrusted request pops the Allow/Deny prompt. Idempotent.
+  function startNet(): Promise<void> {
+    if (netStarted) return netStarted
+    identity = { id: loadOrCreateId(), name: friendlyHostName() }
+    loadTrusted()
+    signaling = new Signaling({
+      getIdentity: () => ({ id: identity.id, name: identity.name }),
+      isTrusted: (id) => trusted.has(id),
+      onIncoming: (peer) => send('listen:incoming', peer),
+      onConnected: (c) => send('listen:connected', c),
+      onSignal: (payload) => send('listen:signal', payload),
+      onError: (reason) => send('listen:error', { reason, message: reason }),
+      onClosed: () => send('listen:disconnected', {})
+    })
+    netStarted = new Promise<void>((resolve) => {
+      signaling!.start((port) => {
+        sigPort = port
+        discovery = new Discovery(
+          { id: identity.id, name: identity.name, sigPort: port },
+          (peers) => send('listen:peers', peers)
+        )
+        discovery.start()
+        resolve()
+      })
+    })
+    return netStarted
+  }
+
+  // Opening the panel just ensures net is up (usually already is) and returns identity.
   ipcMain.handle('listen:start', async () => {
-    if (!signaling) {
-      identity = { id: randomUUID(), name: friendlyHostName(), pin: genPin() }
-      signaling = new Signaling({
-        getPin: () => identity.pin,
-        getIdentity: () => ({ id: identity.id, name: identity.name }),
-        onConnected: (c) => send('listen:connected', c),
-        onSignal: (payload) => send('listen:signal', payload),
-        onError: (reason) => send('listen:error', { reason, message: reason }),
-        onClosed: () => send('listen:disconnected', {})
-      })
-      await new Promise<void>((resolve) => {
-        signaling!.start((port) => {
-          sigPort = port
-          discovery = new Discovery(
-            { id: identity.id, name: identity.name, sigPort: port },
-            (peers) => send('listen:peers', peers)
-          )
-          discovery.start()
-          resolve()
-        })
-      })
-    }
-    return {
-      id: identity.id,
-      name: identity.name,
-      pin: identity.pin,
-      addresses: localAddresses(),
-      sigPort
-    }
+    await startNet()
+    return { id: identity.id, name: identity.name, addresses: localAddresses(), sigPort }
   })
 
   ipcMain.handle('listen:connect', async (_e, arg: unknown) => {
-    const { peerId, pin } = (arg ?? {}) as { peerId?: string; pin?: string }
+    const { peerId } = (arg ?? {}) as { peerId?: string }
     const peer = peerId ? discovery?.lookup(String(peerId)) : undefined
     if (!peer) return { ok: false, error: 'peer-gone' }
     signaling?.connect(
       peer.host,
       peer.sigPort,
-      String(pin ?? ''),
       { id: identity.id, name: identity.name },
       { id: peer.id, name: peer.name }
     )
     return { ok: true }
   })
 
-  // Connect by typed IP when multicast discovery doesn't surface the peer. Assumes the
-  // peer is on the fixed signaling port (the common case).
+  // Connect by typed IP when multicast discovery doesn't surface the peer.
   ipcMain.handle('listen:connect-manual', async (_e, arg: unknown) => {
-    const { host, pin } = (arg ?? {}) as { host?: string; pin?: string }
+    const { host } = (arg ?? {}) as { host?: string }
     const cleanHost = String(host ?? '').trim()
-    // Only allow characters that appear in a hostname / IPv4 / IPv6 literal — reject
-    // slashes, whitespace, control chars, etc. Listen Together is LAN-only, so the
-    // target is always a plain host, never a URL or path.
     if (!cleanHost || !signaling || !/^[a-zA-Z0-9._:-]+$/.test(cleanHost)) {
       return { ok: false, error: 'network' }
     }
     signaling.connect(
       cleanHost,
       LISTEN_SIG_PORT,
-      String(pin ?? ''),
       { id: identity.id, name: identity.name },
       { id: `manual:${cleanHost}`, name: cleanHost }
     )
+    return { ok: true }
+  })
+
+  // The callee user's Allow/Deny (+ trust) decision on an incoming request.
+  ipcMain.handle('listen:respond', async (_e, arg: unknown) => {
+    const { accept, trust } = (arg ?? {}) as { accept?: boolean; trust?: boolean }
+    const peer: ListenPeer | null = signaling?.respond(accept === true) ?? null
+    if (accept === true && trust === true && peer?.id) {
+      trusted.set(peer.id, peer.name)
+      saveTrusted()
+    }
+    return { ok: true }
+  })
+
+  // Forget all trusted devices (Settings → they'll be re-prompted next time).
+  ipcMain.handle('listen:forget-trusted', async () => {
+    trusted.clear()
+    saveTrusted()
     return { ok: true }
   })
 
@@ -154,10 +204,15 @@ export function registerListen(
     return { ok: true }
   })
 
+  // Panel close no longer tears down net (we stay discoverable/connectable while the app
+  // runs); it only drops any live connection.
   ipcMain.handle('listen:stop', async () => {
-    teardownNet()
+    signaling?.disconnect()
     return { ok: true }
   })
+
+  // Start advertising immediately at app launch so trusted peers can connect anytime.
+  void startNet()
 
   return teardownNet
 }
