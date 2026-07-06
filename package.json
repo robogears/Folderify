@@ -1,6 +1,6 @@
 {
   "name": "folderify",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "description": "Your folders, played like Spotify. A read-only music player where the main folder is your library and each subfolder is a playlist.",
   "author": "William",
   "license": "MIT",
