@@ -6,7 +6,7 @@ mirror** of the filesystem: pick a root folder = your library; each immediate su
 playlist. Nothing is ever created/moved/renamed/deleted by the app — the filesystem is the
 single source of truth, scanned at launch and watched live while running.
 
-Current version: **0.1.12** (package.json, package-lock, and iOS `MARKETING_VERSION` are kept in
+Current version: **0.1.13** (package.json, package-lock, and iOS `MARKETING_VERSION` are kept in
 lockstep — bump all three when releasing).
 
 ---
