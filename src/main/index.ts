@@ -7,6 +7,7 @@ import { registerSchemes, registerProtocolHandlers } from './protocols'
 import { registerIpc } from './ipc'
 import { registerUpdater } from './updater'
 import { registerListen } from './listen'
+import { registerMediaKeys } from './media-keys'
 import { MetaCache } from './cache'
 import { Library } from './library/model'
 import { LibraryWatcher } from './library/watcher'
@@ -25,6 +26,7 @@ let miniWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let teardownListen: () => void = () => {}
 let stopUpdater: () => void = () => {}
+let teardownMediaKeys: () => void = () => {}
 
 let scanning = false
 let queuedRoot: string | null = null
@@ -254,6 +256,7 @@ app.whenReady().then(async () => {
   const updater = registerUpdater(() => mainWindow)
   stopUpdater = updater.stop
   teardownListen = registerListen(() => mainWindow)
+  teardownMediaKeys = registerMediaKeys(() => mainWindow)
 
   createWindow()
   createMiniWindow()
@@ -303,4 +306,5 @@ app.on('before-quit', () => {
   void watcher?.stop()
   teardownListen()
   stopUpdater()
+  teardownMediaKeys()
 })

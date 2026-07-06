@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { useNotice } from './notice-store'
 
 export type LayoutPreset = 'default' | 'compact' | 'cover' | 'clean_01' | 'clean_02'
 
@@ -15,6 +16,8 @@ interface SettingsState {
   layout: LayoutPreset
   sidebarCollapsed: boolean
   resumeLastTrack: boolean
+  /** Grab F7/F8/F9 system-wide so only Folderify gets them (macOS; default OFF). */
+  exclusiveMediaKeys: boolean
   /** Transient (not persisted): whether the settings panel is open. */
   settingsOpen: boolean
 
@@ -22,6 +25,7 @@ interface SettingsState {
   setSidebarCollapsed: (v: boolean) => void
   toggleSidebar: () => void
   setResumeLastTrack: (v: boolean) => void
+  setExclusiveMediaKeys: (v: boolean) => void
   openSettings: () => void
   closeSettings: () => void
 }
@@ -32,12 +36,38 @@ export const useSettings = create<SettingsState>()(
       layout: 'default',
       sidebarCollapsed: false,
       resumeLastTrack: true,
+      exclusiveMediaKeys: false,
       settingsOpen: false,
 
       setLayout: (layout) => set({ layout }),
       setSidebarCollapsed: (sidebarCollapsed) => set({ sidebarCollapsed }),
       toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
       setResumeLastTrack: (resumeLastTrack) => set({ resumeLastTrack }),
+
+      // Optimistic toggle; main confirms the grab. If macOS wants the Accessibility
+      // grant (or another app holds the keys), revert and explain — a toggle that
+      // stays on while doing nothing is worse than a visible failure.
+      setExclusiveMediaKeys: (v) => {
+        set({ exclusiveMediaKeys: v })
+        window.api
+          ?.setExclusiveMediaKeys(v)
+          .then((r) => {
+            if (v && !r.ok) {
+              set({ exclusiveMediaKeys: false })
+              useNotice
+                .getState()
+                .show(
+                  r.reason === 'accessibility'
+                    ? 'macOS needs permission first: System Settings → Privacy & Security → Accessibility → enable Folderify, then turn this on again.'
+                    : 'Couldn’t take over the media keys — another app is holding them.'
+                )
+            }
+          })
+          .catch(() => {
+            if (v) set({ exclusiveMediaKeys: false })
+          })
+      },
+
       openSettings: () => set({ settingsOpen: true }),
       closeSettings: () => set({ settingsOpen: false })
     }),
@@ -47,7 +77,8 @@ export const useSettings = create<SettingsState>()(
       partialize: (s) => ({
         layout: s.layout,
         sidebarCollapsed: s.sidebarCollapsed,
-        resumeLastTrack: s.resumeLastTrack
+        resumeLastTrack: s.resumeLastTrack,
+        exclusiveMediaKeys: s.exclusiveMediaKeys
       })
     }
   )

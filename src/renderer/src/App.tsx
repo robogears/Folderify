@@ -197,6 +197,10 @@ export function App(): JSX.Element {
   useEffect(() => {
     init()
     initUpdates()
+    // Re-apply the persisted exclusive-media-keys grab (main is stateless about it).
+    // Goes through the store action so a failed grab reverts the toggle + explains.
+    const s = useSettings.getState()
+    if (s.exclusiveMediaKeys) s.setExclusiveMediaKeys(true)
   }, [init, initUpdates])
 
   useTrayBridge()

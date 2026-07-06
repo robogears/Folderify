@@ -76,6 +76,11 @@ export interface FolderifyApi {
   onUpdateAvailable(cb: (u: UpdateAvailable) => void): Unsubscribe
   onUpdateProgress(cb: (p: UpdateProgress) => void): Unsubscribe
 
+  // --- Exclusive media keys (macOS; opt-in) ---
+  /** Grab (true) or release (false) the hardware media keys F7/F8/F9 system-wide.
+   *  `reason:'accessibility'` = macOS needs the Accessibility grant first. */
+  setExclusiveMediaKeys(on: boolean): Promise<{ ok: boolean; reason?: 'accessibility' | 'taken' }>
+
   // --- Listen Together (LAN peer-to-peer playback) ---
   listen: FolderifyListenApi
 }

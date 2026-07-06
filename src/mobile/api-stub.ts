@@ -80,6 +80,7 @@ export function installStubApi(): void {
     canSelfInstall: async () => false,
     downloadUpdate: async () => ({ ok: false }),
     applyUpdate: async () => ({ ok: false }),
+    setExclusiveMediaKeys: async () => ({ ok: false }),
     openExternal: async () => {},
     onUpdateAvailable: subscribe,
     onUpdateProgress: subscribe

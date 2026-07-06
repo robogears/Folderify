@@ -132,6 +132,15 @@ URL helpers live in `src/shared/ipc.ts`: `mediaUrl(absPath)`, `coverUrl(trackId,
   (http/https URLs only).
 - push: `update:available`, `update:download-progress`.
 
+**Exclusive media keys** (`src/main/media-keys.ts`; raw string channel): invoke
+`mediakeys:set-exclusive` (boolean) — when on, main `globalShortcut`-registers
+MediaPreviousTrack/PlayPause/NextTrack (F7/F8/F9) so **only Folderify** gets them, and fires the
+existing `player:command` channel (tray-bridge applies them). macOS requires the **Accessibility**
+grant (typed `reason:'accessibility'` → the renderer reverts the toggle + explains; partial grabs
+roll back with `reason:'taken'`). Persisted as `exclusiveMediaKeys` in `folderify.settings`
+(default OFF); the renderer re-applies it on launch (main is stateless about it). When off, keys
+flow through the normal cooperative MediaSession/Now Playing routing.
+
 **Mini-player relay** (fire-and-forget `ipcRenderer.send`, relayed window↔window in
 `src/main/index.ts`): main window publishes `player:state` (a `PlayerSnapshot`) → forwarded to the
 mini window; mini window sends `player:command` (a `PlayerCommand`) → forwarded to the main window,

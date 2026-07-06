@@ -107,6 +107,7 @@ export function installNativeApi(): void {
     canSelfInstall: async () => false,
     downloadUpdate: async () => ({ ok: false }),
     applyUpdate: async () => ({ ok: false }),
+    setExclusiveMediaKeys: async () => ({ ok: false }),
     openExternal: async (url) => {
       window.open(url, '_blank')
     },

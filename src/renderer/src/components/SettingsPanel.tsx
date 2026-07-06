@@ -66,6 +66,8 @@ export function SettingsPanel(): JSX.Element | null {
   const setSidebarCollapsed = useSettings((s) => s.setSidebarCollapsed)
   const resumeLastTrack = useSettings((s) => s.resumeLastTrack)
   const setResumeLastTrack = useSettings((s) => s.setResumeLastTrack)
+  const exclusiveMediaKeys = useSettings((s) => s.exclusiveMediaKeys)
+  const setExclusiveMediaKeys = useSettings((s) => s.setExclusiveMediaKeys)
 
   const rootName = useLibrary((s) => s.rootName)
   const trackCount = useLibrary((s) => s.tracksById.size)
@@ -133,6 +135,12 @@ export function SettingsPanel(): JSX.Element | null {
               onChange={setResumeLastTrack}
               label="Resume last track on launch"
               hint="Reopen to your last track, cued up where you left off."
+            />
+            <Toggle
+              checked={exclusiveMediaKeys}
+              onChange={setExclusiveMediaKeys}
+              label="Exclusive media keys"
+              hint="Route ⏮ ⏯ ⏭ (F7/F8/F9) only to Folderify — other apps can't take them while this is on. macOS may ask for Accessibility access."
             />
           </section>
 

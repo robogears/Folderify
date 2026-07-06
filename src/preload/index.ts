@@ -43,6 +43,8 @@ const api: FolderifyApi = {
   onUpdateAvailable: (cb: (u: UpdateAvailable) => void) => subscribe('update:available', cb),
   onUpdateProgress: (cb: (p: UpdateProgress) => void) => subscribe('update:download-progress', cb),
 
+  setExclusiveMediaKeys: (on: boolean) => ipcRenderer.invoke('mediakeys:set-exclusive', on),
+
   listen: {
     start: () => ipcRenderer.invoke('listen:start'),
     stop: () => ipcRenderer.invoke('listen:stop'),
