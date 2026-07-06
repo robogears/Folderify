@@ -1,54 +1,36 @@
-# What's new in v0.1.14
+# What's new in v0.1.15
 
-**Listen Together got faster, and pairing is simpler — no more codes.**
+**Listen Together now plays in near-perfect sync.**
 
-## Simpler pairing (no more 6-digit code)
+## Tighter sync between the two Macs
 
-- **Just approve and go.** Click the other Mac in the Connect panel, and a request pops
-  up on their screen — they tap **Allow** and you're connected. No typing a pairing code.
-- **Trust a device once, connect anytime.** When they approve, they can tick **"Trust
-  this device."** After that, you can reconnect with no prompt at all — even if they don't
-  have the Connect panel open. As long as Folderify is running on both Macs, a trusted
-  device just connects.
-- **Changed your mind?** Settings → Playback → **Forget trusted devices** clears the list,
-  and everyone gets asked again next time.
+When you listen together, both Macs now stay locked to within a few hundredths of a
+second of each other — instead of drifting up to about half a second apart. The result is
+that it actually sounds like one shared room, not two devices almost-together.
 
-## Faster song streaming
+It gets there without any jumpiness:
 
-Picking a song the other person doesn't have used to take 5–10 seconds. Now it's close to
-instant, three ways — and **your music files are never touched or modified** (Folderify
-stays strictly read-only; all of this happens on an in-memory copy):
+- **Continuous, inaudible correction.** Rather than letting the two drift and then jumping
+  to catch up, the listening Mac gently and constantly steers itself to match — using tiny
+  tempo adjustments you can't hear (pitch is preserved). Big jumps (like a seek) still snap
+  instantly.
+- **Locks on faster when you connect**, and stays aligned more accurately over time thanks
+  to smarter clock measurement.
 
-- **Smaller transfers.** Lossless files (FLAC/WAV) are compressed on the fly to a high-
-  quality ~192 kbps stream before sending — much less to download, so playback starts
-  sooner.
-- **Play while it loads.** Songs start playing before the whole file has arrived, instead
-  of waiting for the full download.
-- **The next songs are already there.** While you listen, the next few tracks quietly
-  pre-download on the other Mac — so when someone skips ahead, it just plays.
-
-You can turn the compression off in **Settings → Playback → "Compress Listen Together
-transfers"** if you'd rather always send the original file.
-
-## Also
-
-- **See what's coming up** from the person you're listening with, right in the queue.
+Nothing about your library changes — this is all in how playback is kept in step.
 
 ---
 
 # Install / update
 
-- **From v0.1.13:** click the in-app **Update** button — it downloads and reinstalls
-  itself, then relaunches. That's it.
-- **Fresh install:** download `Folderify-0.1.14-arm64.dmg` below, open it, and drag
+- **From v0.1.14:** click the in-app **Update** button — it downloads, reinstalls, and
+  relaunches itself.
+- **Fresh install:** download `Folderify-0.1.15-arm64.dmg` below, open it, and drag
   Folderify to Applications.
 
 On a fresh install, macOS Gatekeeper holds the app back on first launch (it isn't
 notarized). On macOS 15+: try to open it, then go to **System Settings → Privacy &
 Security → Open Anyway** — once only.
-
-The first time you use Listen Together, macOS asks to let Folderify **find devices on your
-local network** — allow it, or discovery and connections won't work.
 
 Your settings, metadata cache, and thumbnails live in `~/Library/Application Support/Folderify/`.
 
@@ -60,4 +42,4 @@ Your settings, metadata cache, and thumbnails live in `~/Library/Application Sup
 
 ---
 
-**Full Changelog**: https://github.com/robogears/Folderify/compare/v0.1.13...v0.1.14
+**Full Changelog**: https://github.com/robogears/Folderify/compare/v0.1.14...v0.1.15

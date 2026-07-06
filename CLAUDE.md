@@ -448,11 +448,18 @@ the receiver plays its own copy, kept in lockstep by a clock-synced control prot
 - **Protocol brain**: `src/renderer/src/listen/session.ts`. Source reads its own bytes via
   `listen:read-track` → optionally transcodes → chunks (64KB, backpressure, **4-byte LE transferId
   frame header** so multiple transfers interleave) → peer; receiver reassembles per-transfer →
-  **MSE** (mp3/webm, progressive) or **Blob URL** fallback → `engine.loadRemote()`. Sync =
-  authoritative-source `state{position, atClock}` + ping/pong clock offset, drift-corrected past
-  0.4s. Whoever picks a track becomes the source (two-way handoff); receiver play/pause/seek relay
-  to the source. Falls back to a **local simulation** when `window.api.listen` is absent (browser
-  harness / non-Electron), so the UI still works.
+  **MSE** (mp3/webm, progressive) or **Blob URL** fallback → `engine.loadRemote()`. Sync is a
+  **master-clock follower** (`syncTick`, 4Hz + on every `state`): the receiver extrapolates the
+  source's position from `state{position, atClock}` + a **min-RTT-filtered** ping/pong clock offset
+  (source state 2Hz, ping 1Hz + a 6-ping startup burst), then holds the skew near zero with tiny
+  **pitch-preserved `playbackRate` nudges** (±5%, proportional, hysteresis engage 45ms / release
+  20ms) and reserves a hard seek for >250ms jumps — so the two Macs play ~1:1 (steady-state <~45ms
+  vs the old tolerate-400ms-then-seek). `syncTick` only acts when `activatedTransferId ===
+  currentTransferId` (the engine is actually playing the track the state describes — else a
+  blob-path track change would seek the still-loading previous track); rate resets to 1.0 on every
+  load/teardown/handoff. Whoever picks a track becomes the source (two-way handoff); receiver
+  play/pause/seek relay to the source. Falls back to a **local simulation** when `window.api.listen`
+  is absent (browser harness / non-Electron), so the UI still works.
 - **Faster transfers (transcode + progressive + prefetch)** — three layers, all opt-outable via the
   `compressTransfers` setting (default on; the library files are **never touched** — everything is
   an in-memory copy):

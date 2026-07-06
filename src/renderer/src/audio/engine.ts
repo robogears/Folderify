@@ -72,6 +72,7 @@ class AudioEngine {
 
   load(url: string): void {
     this.durationFixTried = false
+    this.audio.playbackRate = 1 // clear any leftover Listen-sync tempo nudge
     this.audio.src = url
     this.audio.load()
   }
@@ -83,6 +84,7 @@ class AudioEngine {
    */
   loadRemote(url: string, startTime: number, autoplay: boolean): void {
     this.durationFixTried = false
+    this.audio.playbackRate = 1 // fresh track starts at reference tempo; sync re-nudges
     this.audio.src = url
     this.audio.load()
     const onMeta = (): void => {
@@ -102,6 +104,7 @@ class AudioEngine {
   /** Load a track WITHOUT playing, seeking to startTime once metadata is ready. */
   prepare(url: string, startTime: number): void {
     this.durationFixTried = false
+    this.audio.playbackRate = 1
     this.audio.src = url
     this.audio.load()
     if (startTime > 0) {
@@ -136,6 +139,18 @@ class AudioEngine {
       this.audio.currentTime = Math.max(0, seconds)
       this.handlers.onTime?.(this.audio.currentTime)
     }
+  }
+
+  /**
+   * Nudge playback tempo for Listen Together sync — the receiver follows the source's
+   * clock with tiny ±% rate changes instead of audible seeks. Pitch is preserved, so
+   * small nudges are inaudible. Reset to 1 on every new load (see load/loadRemote/prepare).
+   */
+  setPlaybackRate(rate: number): void {
+    const r = Number.isFinite(rate) ? Math.max(0.5, Math.min(2, rate)) : 1
+    // preservesPitch defaults true in Chromium, but pin it so a nudge never shifts pitch.
+    this.audio.preservesPitch = true
+    if (this.audio.playbackRate !== r) this.audio.playbackRate = r
   }
 
   /** Set volume from a 0..1 linear slider value, applying a perceptual curve. */

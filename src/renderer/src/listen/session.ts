@@ -55,14 +55,34 @@ let applyingRemote = false
 let transferSeq = 0
 let currentTransferId = 0 // the live playback transfer (source + receiver)
 let clockOffset = 0 // estimated (sourceClock - myClock) in ms
+const clockSamples: { rtt: number; offset: number }[] = [] // min-RTT filter window
 let pingTimer: number | undefined
 let stateTimer: number | undefined
+let syncTimer: number | undefined // receiver: continuous clock-follow tick
 let connectTimer: number | undefined
 let rxStallTimer: number | undefined
 let prevTrackId: string | null = null
 let prevPlaying = false
 let peerHasNext = false
 let prevUpNext: string[] = []
+// Receiver's last authoritative snapshot from the source — drives the sync follower.
+let lastRemoteState: { position: number; atClock: number; playing: boolean } | null = null
+let prevRemotePlaying = false
+let syncNudging = false // hysteresis latch: are we currently applying a tempo nudge?
+let activatedTransferId = 0 // the transfer the engine is ACTUALLY playing (guards syncTick)
+
+// Sync follower (receiver tracks the source's clock). Instead of tolerating up to 0.4s
+// of skew and then hard-seeking, we hold the offset near zero with tiny tempo nudges and
+// reserve seeks for big jumps — so the two Macs play ~1:1.
+const SYNC_TICK_MS = 250 // how often the receiver re-checks its offset
+// Hysteresis (not a single deadband): only START nudging past ENGAGE, and keep nudging
+// until back within RELEASE. HTMLMediaElement.currentTime is quantized to ~10-20ms, so a
+// single 20ms deadband would chatter the rate at the threshold; ENGAGE sits safely above it.
+const SYNC_ENGAGE = 0.045 // > 45 ms off → begin correcting
+const SYNC_RELEASE = 0.02 // ≤ 20 ms off → stop correcting (play at exactly 1.0)
+const SYNC_HARD_SEEK = 0.25 // > 250 ms: too far to slew, snap with a seek
+const SYNC_MAX_SLEW = 0.05 // cap the tempo nudge at ±5% (inaudible, pitch-preserved)
+const SYNC_GAIN = 0.5 // proportional gain: rate = 1 − GAIN·error
 
 const RX_STALL_MS = 20000
 
@@ -316,8 +336,17 @@ function metaOf(track: Track): RemoteTrackMeta {
 
 async function becomeSourceFor(track: Track, position: number, playing: boolean): Promise<void> {
   if (!peer) return
+  const wasReceiver = role === 'receiver'
   role = 'source'
   useListen.setState({ role: 'source' })
+  if (wasReceiver) {
+    // Handoff receiver→source: we're the reference clock now, so stop following + nudging.
+    lastRemoteState = null
+    prevRemotePlaying = false
+    syncNudging = false
+    activatedTransferId = 0
+    engine.setPlaybackRate(1)
+  }
   const transferId = ++transferSeq
   currentTransferId = transferId
   prefetchAbort = true // a live pick preempts any background prefetch
@@ -605,6 +634,14 @@ function activateRemotePlayback(
   playing: boolean
 ): void {
   role = 'receiver'
+  // New remote track: drop the previous track's reference so the follower stays idle
+  // (playing at 1.0 from the load's seek position) until this track's first `state`
+  // arrives — otherwise a syncTick in that window could seek to a stale position. Mark THIS
+  // transfer activated so syncTick will act on it (and not on an earlier still-loading one).
+  lastRemoteState = null
+  prevRemotePlaying = playing
+  syncNudging = false
+  activatedTransferId = currentTransferId
   const track = synthTrack(`remote:${srcId}:${currentTransferId}`, meta, size)
   applyingRemote = true
   useLibrary.getState().setRemoteTrack(track)
@@ -674,8 +711,15 @@ function handleControl(m: ControlMsg): void {
       peer?.send({ t: 'pong', t0: m.t0, t1: performance.now() })
       break
     case 'pong': {
-      const rtt = performance.now() - m.t0
-      clockOffset = m.t1 + rtt / 2 - performance.now()
+      const now = performance.now()
+      const rtt = now - m.t0
+      clockSamples.push({ rtt, offset: m.t1 + rtt / 2 - now })
+      if (clockSamples.length > 12) clockSamples.shift()
+      // Trust the least-delayed sample: minimum RTT ⇒ least queuing skew in the estimate,
+      // so one GC-delayed pong can't jerk the offset.
+      let best = clockSamples[0]
+      for (const s of clockSamples) if (s.rtt < best.rtt) best = s
+      clockOffset = best.offset
       break
     }
     case 'load':
@@ -866,33 +910,85 @@ function concatChunks(chunks: Uint8Array[], total: number): Uint8Array {
 
 function applyRemoteState(m: Extract<ControlMsg, { t: 'state' }>): void {
   if (role !== 'receiver') return
-  applyingRemote = true
-  usePlayer.setState({ isPlaying: m.playing })
-  applyingRemote = false
-  if (m.playing) void engine.play()
-  else engine.pause()
+  lastRemoteState = { position: m.position, atClock: m.atClock, playing: m.playing }
+  // Only act on play/pause TRANSITIONS — poking the element every tick is wasteful and
+  // fights the sync follower, which owns position/tempo.
+  if (m.playing !== prevRemotePlaying) {
+    prevRemotePlaying = m.playing
+    applyingRemote = true
+    usePlayer.setState({ isPlaying: m.playing })
+    applyingRemote = false
+    if (m.playing) void engine.play()
+    else engine.pause()
+  }
+  syncTick() // react immediately to this snapshot (e.g. a source seek), not on the next tick
+}
+
+/**
+ * Master-clock follower. Extrapolates where the source is *now* (its last position +
+ * elapsed, corrected by clockOffset) and pulls the receiver toward it: a hard seek only
+ * for big jumps, tiny pitch-preserved tempo nudges for small offsets, and nothing at all
+ * once we're within SYNC_DEADBAND — keeping the two Macs within ~20 ms of each other.
+ */
+function syncTick(): void {
+  if (role !== 'receiver' || !lastRemoteState) return
+  // Only correct the track the engine is ACTUALLY playing. On a blob-path (non-MSE) track
+  // change the new track isn't activated until its bytes fully arrive, while the source's
+  // `state` already describes it — without this guard we'd seek the still-playing PREVIOUS
+  // track to the new track's position. currentTransferId advances at onLoad; activatedTransferId
+  // only when the engine actually starts the track (activateRemotePlayback).
+  if (activatedTransferId !== currentTransferId) return
+  const st = lastRemoteState
+  if (!st.playing) {
+    syncNudging = false
+    engine.setPlaybackRate(1)
+    return
+  }
   const sourceNow = performance.now() + clockOffset
-  const elapsed = m.playing ? (sourceNow - m.atClock) / 1000 : 0
-  const target = m.position + elapsed
-  if (Number.isFinite(target) && Math.abs(engine.currentTime - target) > 0.4) {
-    engine.seek(Math.max(0, target))
+  const expected = st.position + (sourceNow - st.atClock) / 1000
+  if (!Number.isFinite(expected)) return
+  const err = engine.currentTime - expected // + = receiver is ahead of the source
+  const abs = Math.abs(err)
+  if (abs > SYNC_HARD_SEEK) {
+    syncNudging = false
+    engine.setPlaybackRate(1)
+    engine.seek(Math.max(0, expected))
+  } else if (abs > SYNC_ENGAGE || (syncNudging && abs > SYNC_RELEASE)) {
+    // Ahead (err>0) → slow down (<1); behind → speed up (>1). Clamped to ±SYNC_MAX_SLEW.
+    // The hysteresis (ENGAGE to start, RELEASE to stop) keeps currentTime quantization from
+    // chattering the rate near the threshold.
+    syncNudging = true
+    const rate = Math.min(1 + SYNC_MAX_SLEW, Math.max(1 - SYNC_MAX_SLEW, 1 - SYNC_GAIN * err))
+    engine.setPlaybackRate(rate)
+  } else {
+    syncNudging = false
+    engine.setPlaybackRate(1)
   }
 }
 
 // ============================================================ timers + teardown
 function startTimers(): void {
   stopTimers()
-  pingTimer = window.setInterval(() => peer?.send({ t: 'ping', t0: performance.now() }), 2000)
+  // Ping 1 Hz (keeps the clock offset fresh; RTT is tiny on a LAN) and broadcast source
+  // state 2 Hz (snappier re-alignment after a seek). The receiver's follower ticks 4 Hz.
+  pingTimer = window.setInterval(() => peer?.send({ t: 'ping', t0: performance.now() }), 1000)
   stateTimer = window.setInterval(() => {
     if (role === 'source') sendState()
-  }, 1000)
+  }, 500)
+  syncTimer = window.setInterval(syncTick, SYNC_TICK_MS)
+  // Burst a handful of pings up front so the clock offset locks within ~1s, not ~12s.
+  for (let i = 0; i < 6; i++) {
+    window.setTimeout(() => peer?.send({ t: 'ping', t0: performance.now() }), i * 150)
+  }
 }
 function stopTimers(): void {
   if (pingTimer) window.clearInterval(pingTimer)
   if (stateTimer) window.clearInterval(stateTimer)
+  if (syncTimer) window.clearInterval(syncTimer)
   if (connectTimer) window.clearTimeout(connectTimer)
   pingTimer = undefined
   stateTimer = undefined
+  syncTimer = undefined
   connectTimer = undefined
 }
 
@@ -938,6 +1034,12 @@ function teardown(): void {
   lastHorizonKey = ''
   prefetchAbort = true
   clockOffset = 0
+  clockSamples.length = 0
+  lastRemoteState = null
+  prevRemotePlaying = false
+  syncNudging = false
+  activatedTransferId = 0
+  engine.setPlaybackRate(1) // drop any sync tempo nudge
   currentTransferId = 0
   peerHasNext = false
 
