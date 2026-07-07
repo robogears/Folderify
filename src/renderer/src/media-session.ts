@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { usePlayer } from './state/player-store'
 import { useLibrary } from './state/library-store'
+import { useListen } from './state/listen-store'
 import { coverUrl } from '@shared/ipc'
 
 // Wires our player into the OS "Now Playing" surface (macOS Control Center widget +
@@ -71,6 +72,16 @@ export function useMediaSession(): void {
     }
 
     const loadArtwork = async (trackId: string | null): Promise<void> => {
+      // Remote (Listen Together) tracks: the peer streamed the cover as a data URL —
+      // use it directly (there's nothing at cover:// for a remote id).
+      if (trackId && trackId.startsWith('remote:')) {
+        const url = useListen.getState().remoteCoverUrl
+        if (!url) return
+        artDataUrl = url
+        artForTrack = trackId
+        applyMetadata(trackId)
+        return
+      }
       const track = trackId ? useLibrary.getState().tracksById.get(trackId) : undefined
       if (!track || !track.hasArt) return
       if (artForTrack === trackId && artDataUrl) return // already have it
@@ -136,11 +147,26 @@ export function useMediaSession(): void {
       if (s.duration !== prev.duration) updatePosition()
     })
 
+    // A remote track's cover often lands moments AFTER the track activates (it streams
+    // from the peer) — refresh the widget art when it does. On a null transition
+    // (track with no art), re-apply metadata so stale art is CLEARED, not kept.
+    const unsubCover = useListen.subscribe((s, prev) => {
+      if (s.remoteCoverUrl === prev.remoteCoverUrl) return
+      const cur = player.getState().currentTrackId
+      if (cur && cur.startsWith('remote:')) {
+        artDataUrl = null
+        artForTrack = null
+        applyMetadata(cur) // text (and cleared artwork) right away
+        void loadArtwork(cur) // re-attach art if a cover is present
+      }
+    })
+
     // Correct the scrubber for seeks/drift (the OS extrapolates between updates).
     const interval = window.setInterval(updatePosition, 1000)
 
     return () => {
       window.clearInterval(interval)
+      unsubCover()
       unsub()
       for (const a of ACTIONS) setAction(a, null)
       ms.metadata = null

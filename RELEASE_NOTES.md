@@ -1,36 +1,42 @@
-# What's new in v0.1.15
+# What's new in v0.1.16
 
-**Listen Together now plays in near-perfect sync.**
+**Listen Together: album art on both screens, and snappier skipping.**
 
-## Tighter sync between the two Macs
+## Album art for the person listening
 
-When you listen together, both Macs now stay locked to within a few hundredths of a
-second of each other — instead of drifting up to about half a second apart. The result is
-that it actually sounds like one shared room, not two devices almost-together.
+When someone streams you a track over Listen Together, you now see its **album art** —
+in the player bar and in the macOS Now Playing widget (Control Center / lock screen) —
+instead of a blank placeholder. The art is sent right alongside the track, and because
+it travels with the pre-download, **skipping to an already-queued song shows its cover
+instantly**.
 
-It gets there without any jumpiness:
+## Faster, tighter skipping & scrubbing
 
-- **Continuous, inaudible correction.** Rather than letting the two drift and then jumping
-  to catch up, the listening Mac gently and constantly steers itself to match — using tiny
-  tempo adjustments you can't hear (pitch is preserved). Big jumps (like a seek) still snap
-  instantly.
-- **Locks on faster when you connect**, and stays aligned more accurately over time thanks
-  to smarter clock measurement.
+- **Skips and scrubs keep up now.** When the person in control jumps to another point in a
+  song (or skips tracks), the other Mac re-aligns almost immediately, instead of taking a
+  moment to catch up.
+- Under the hood: the controlling Mac announces a jump the instant it happens rather than
+  waiting for the next sync tick, the follower checks in more often, and seeks are applied
+  optimistically so playback doesn't briefly snap backwards before settling.
 
-Nothing about your library changes — this is all in how playback is kept in step.
+Together with the near-1:1 sync from v0.1.15, Listen Together now feels like one shared
+player — same song, same spot, same cover, on both Macs.
 
 ---
 
 # Install / update
 
-- **From v0.1.14:** click the in-app **Update** button — it downloads, reinstalls, and
+- **From v0.1.15:** click the in-app **Update** button — it downloads, reinstalls, and
   relaunches itself.
-- **Fresh install:** download `Folderify-0.1.15-arm64.dmg` below, open it, and drag
+- **Fresh install:** download `Folderify-0.1.16-arm64.dmg` below, open it, and drag
   Folderify to Applications.
 
 On a fresh install, macOS Gatekeeper holds the app back on first launch (it isn't
 notarized). On macOS 15+: try to open it, then go to **System Settings → Privacy &
 Security → Open Anyway** — once only.
+
+The first time you use Listen Together, macOS asks to let Folderify **find devices on your
+local network** — allow it, or discovery and connections won't work.
 
 Your settings, metadata cache, and thumbnails live in `~/Library/Application Support/Folderify/`.
 
@@ -42,4 +48,4 @@ Your settings, metadata cache, and thumbnails live in `~/Library/Application Sup
 
 ---
 
-**Full Changelog**: https://github.com/robogears/Folderify/compare/v0.1.14...v0.1.15
+**Full Changelog**: https://github.com/robogears/Folderify/compare/v0.1.15...v0.1.16

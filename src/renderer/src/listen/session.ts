@@ -33,6 +33,8 @@ import {
   LISTEN_PREFETCH_COUNT,
   LISTEN_CACHE_MAX_ENTRIES,
   LISTEN_CACHE_MAX_BYTES,
+  LISTEN_COVER_MAX_B64,
+  LISTEN_COVER_CACHE_MAX,
   type ControlMsg,
   type HorizonItem,
   type ListenPeer,
@@ -65,16 +67,27 @@ let prevTrackId: string | null = null
 let prevPlaying = false
 let peerHasNext = false
 let prevUpNext: string[] = []
+// Source-side scrub detection: last observed position + when we observed it, plus a
+// grace window after each track change — the engine's VBR Infinity-duration fix emits
+// transient positions (jump to real duration, then back to 0) during load that must
+// never be broadcast as user scrubs.
+let prevSrcTime = 0
+let prevSrcWall = 0
+let srcTrackChangedWall = 0
+const SRC_SCRUB_GRACE_MS = 1500
 // Receiver's last authoritative snapshot from the source — drives the sync follower.
 let lastRemoteState: { position: number; atClock: number; playing: boolean } | null = null
 let prevRemotePlaying = false
 let syncNudging = false // hysteresis latch: are we currently applying a tempo nudge?
 let activatedTransferId = 0 // the transfer the engine is ACTUALLY playing (guards syncTick)
+// Source-clock timestamp of the receiver's last optimistic seek — state frames older
+// than this are stale (sent before the source processed the seek) and are dropped.
+let seekGuardAtClock = 0
 
 // Sync follower (receiver tracks the source's clock). Instead of tolerating up to 0.4s
 // of skew and then hard-seeking, we hold the offset near zero with tiny tempo nudges and
 // reserve seeks for big jumps — so the two Macs play ~1:1.
-const SYNC_TICK_MS = 250 // how often the receiver re-checks its offset
+const SYNC_TICK_MS = 150 // how often the receiver re-checks its offset (~6.7 Hz)
 // Hysteresis (not a single deadband): only START nudging past ENGAGE, and keep nudging
 // until back within RELEASE. HTMLMediaElement.currentTime is quantized to ~10-20ms, so a
 // single 20ms deadband would chatter the rate at the threshold; ENGAGE sits safely above it.
@@ -136,6 +149,21 @@ const rxByTransfer = new Map<number, RxSink>()
 let currentBlobUrl: string | null = null // the live <audio> object URL (blob or MSE)
 
 const relay = (c: { type: 'play' | 'pause' | 'seek'; value?: number }): void => {
+  // Optimistic follower update on seek: the receiver's engine already jumped locally
+  // (player-store seeks before relaying), so move our reference point too — otherwise
+  // the next syncTick (≤150ms away) would yank playback BACK to the stale position and
+  // then forward again when the source's echo lands (~1 RTT). seekGuardAtClock makes
+  // applyRemoteState drop in-flight frames the source sent BEFORE it processed this
+  // seek (their atClock predates ours); the post-seek echo passes and overwrites.
+  if (c.type === 'seek' && typeof c.value === 'number') {
+    const nowOnSourceClock = performance.now() + clockOffset
+    seekGuardAtClock = nowOnSourceClock
+    lastRemoteState = {
+      position: c.value,
+      atClock: nowOnSourceClock,
+      playing: lastRemoteState?.playing ?? usePlayer.getState().isPlaying
+    }
+  }
   peer?.send({ t: 'command', cmd: c.type, value: c.value })
 }
 
@@ -334,6 +362,67 @@ function metaOf(track: Track): RemoteTrackMeta {
   }
 }
 
+// ============================================================ cover art (source → receiver)
+// Small JPEG thumbs ride the control channel as base64 so the receiver can show album
+// art for streamed tracks. Sent alongside every `load` and `prefetch`.
+const srcCoverCache = new Map<string, string | null>() // srcId → b64 (null = known no-art)
+
+function b64FromBytes(buf: ArrayBuffer): string {
+  const u8 = new Uint8Array(buf)
+  let s = ''
+  const CHUNK = 0x8000 // String.fromCharCode arg-count limit safety
+  for (let i = 0; i < u8.length; i += CHUNK) {
+    s += String.fromCharCode(...u8.subarray(i, Math.min(i + CHUNK, u8.length)))
+  }
+  return btoa(s)
+}
+
+/** Read + send a track's cover to the peer (memoized; silent no-op when the track has
+ *  no thumbnail). Fire-and-forget from the load/prefetch paths. */
+async function sendCover(srcId: string): Promise<void> {
+  if (!peer) return
+  let b64 = srcCoverCache.get(srcId)
+  if (b64 === undefined) {
+    try {
+      const bytes = await window.api.listen.readCover(srcId)
+      b64 = bytes && bytes.byteLength > 0 ? b64FromBytes(bytes) : null
+    } catch {
+      b64 = null
+    }
+    if (b64 && b64.length > LISTEN_COVER_MAX_B64) b64 = null // never oversize a frame
+    // The peer may have disconnected during the IPC read (teardown nulls it and clears
+    // the caches) — bail instead of throwing / re-populating a cleared cache.
+    if (!peer) return
+    srcCoverCache.set(srcId, b64)
+    while (srcCoverCache.size > 64) {
+      const oldest = srcCoverCache.keys().next().value as string | undefined
+      if (oldest === undefined) break
+      srcCoverCache.delete(oldest)
+    }
+  }
+  if (b64) peer.send({ t: 'cover', srcId, b64 })
+}
+
+// Receiver side: decoded covers by srcId (data URLs — tiny, no revocation lifecycle).
+const rxCoverCache = new Map<string, string>()
+let activeSrcId: string | null = null // the srcId the receiver is currently rendering
+
+function applyCoverFrame(m: Extract<ControlMsg, { t: 'cover' }>): void {
+  if (typeof m.srcId !== 'string' || typeof m.b64 !== 'string') return
+  if (m.b64.length === 0 || m.b64.length > LISTEN_COVER_MAX_B64) return
+  if (!/^[A-Za-z0-9+/=]+$/.test(m.b64)) return
+  const dataUrl = `data:image/jpeg;base64,${m.b64}`
+  rxCoverCache.delete(m.srcId) // LRU bump
+  rxCoverCache.set(m.srcId, dataUrl)
+  while (rxCoverCache.size > LISTEN_COVER_CACHE_MAX) {
+    const oldest = rxCoverCache.keys().next().value as string | undefined
+    if (oldest === undefined) break
+    rxCoverCache.delete(oldest)
+  }
+  // Art for the track we're already showing → pop it in now.
+  if (m.srcId === activeSrcId) useListen.setState({ remoteCoverUrl: dataUrl })
+}
+
 async function becomeSourceFor(track: Track, position: number, playing: boolean): Promise<void> {
   if (!peer) return
   const wasReceiver = role === 'receiver'
@@ -345,7 +434,10 @@ async function becomeSourceFor(track: Track, position: number, playing: boolean)
     prevRemotePlaying = false
     syncNudging = false
     activatedTransferId = 0
+    activeSrcId = null
+    seekGuardAtClock = 0
     engine.setPlaybackRate(1)
+    useListen.setState({ remoteCoverUrl: null })
   }
   const transferId = ++transferSeq
   currentTransferId = transferId
@@ -371,6 +463,7 @@ async function becomeSourceFor(track: Track, position: number, playing: boolean)
       playing
     })
     sendState()
+    void sendCover(track.id) // art rides behind the load frame (small, one message)
     // Receiver replies 'need' (→ streamLive) or 'have' (cached; nothing to send).
   } catch (err) {
     console.error('[listen] prepare/source error:', err)
@@ -413,6 +506,7 @@ async function handlePrefetchRequest(srcId: string): Promise<void> {
     return
   }
   const transferId = ++transferSeq
+  void sendCover(srcId) // cover first: tiny, so a skip-to-cached-track shows art instantly
   peer.send({ t: 'prefetch', transferId, srcId, size: prepared.bytes.byteLength, container: prepared.container })
   prefetchAbort = false
   const res = await peer.sendBytes(transferId, prepared.bytes, () => prefetchAbort)
@@ -422,6 +516,9 @@ async function handlePrefetchRequest(srcId: string): Promise<void> {
 
 function sendState(): void {
   if (role !== 'source' || !peer) return
+  // Mid VBR-duration-fix the element's currentTime is transient garbage (jumps to the
+  // real duration, then back to 0) — never broadcast it; the next tick sends real state.
+  if (engine.durationFixInProgress) return
   const s = usePlayer.getState()
   peer.send({
     t: 'state',
@@ -503,9 +600,30 @@ function onPlayerChange(s: PlayerSnapshot): void {
   }
   const local = localTrack(s.currentTrackId)
   if (local) {
-    if (s.currentTrackId !== prevTrackId) void becomeSourceFor(local, s.currentTime, s.isPlaying)
-    else if (s.isPlaying !== prevPlaying && role === 'source') sendState()
+    if (s.currentTrackId !== prevTrackId) {
+      srcTrackChangedWall = performance.now()
+      void becomeSourceFor(local, s.currentTime, s.isPlaying)
+    } else if (role === 'source') {
+      if (s.isPlaying !== prevPlaying) {
+        sendState()
+      } else if (performance.now() - srcTrackChangedWall > SRC_SCRUB_GRACE_MS) {
+        // Detect a local scrub/seek as a position discontinuity and broadcast state NOW
+        // instead of waiting for the next timer tick — the receiver re-aligns ~instantly.
+        // Playing: position should advance ≈ wall time; paused: it shouldn't move at all.
+        // Suppressed for a grace window after each track change: the VBR duration fix
+        // emits transient positions (→ real duration → back to 0) during load, and even
+        // the finite middle value must not be broadcast as a scrub. Scrubs inside the
+        // window still reach the receiver via the 4 Hz state timer.
+        const dt = (performance.now() - prevSrcWall) / 1000
+        const jump = s.isPlaying
+          ? Math.abs(s.currentTime - prevSrcTime - dt)
+          : Math.abs(s.currentTime - prevSrcTime)
+        if (jump > 0.35 && Number.isFinite(s.currentTime) && s.currentTime < 86_400) sendState()
+      }
+    }
   }
+  prevSrcTime = s.currentTime
+  prevSrcWall = performance.now()
   prevTrackId = s.currentTrackId
   prevPlaying = s.isPlaying
 }
@@ -642,6 +760,12 @@ function activateRemotePlayback(
   prevRemotePlaying = playing
   syncNudging = false
   activatedTransferId = currentTransferId
+  seekGuardAtClock = 0
+  activeSrcId = srcId
+  // Publish this track's cover (or clear) BEFORE the player-store update: media-session
+  // reacts to the track change synchronously and must read the NEW track's art, never
+  // the previous one's. A cover that arrives later pops in via applyCoverFrame.
+  useListen.setState({ remoteCoverUrl: rxCoverCache.get(srcId) ?? null })
   const track = synthTrack(`remote:${srcId}:${currentTransferId}`, meta, size)
   applyingRemote = true
   useLibrary.getState().setRemoteTrack(track)
@@ -766,6 +890,9 @@ function handleControl(m: ControlMsg): void {
       break
     case 'horizon':
       applyHorizon(m)
+      break
+    case 'cover':
+      applyCoverFrame(m)
       break
     case 'bye':
       teardown()
@@ -910,6 +1037,10 @@ function concatChunks(chunks: Uint8Array[], total: number): Uint8Array {
 
 function applyRemoteState(m: Extract<ControlMsg, { t: 'state' }>): void {
   if (role !== 'receiver') return
+  // Drop frames the source sent BEFORE it processed our optimistic seek — applying one
+  // would yank playback back to the pre-seek position and then forward again on the
+  // echo. atClock is on the source's clock, same axis as seekGuardAtClock.
+  if (m.atClock < seekGuardAtClock) return
   lastRemoteState = { position: m.position, atClock: m.atClock, playing: m.playing }
   // Only act on play/pause TRANSITIONS — poking the element every tick is wasteful and
   // fights the sync follower, which owns position/tempo.
@@ -942,6 +1073,12 @@ function syncTick(): void {
   if (!st.playing) {
     syncNudging = false
     engine.setPlaybackRate(1)
+    // Track paused scrubs too: while paused the source's position is static (no
+    // extrapolation), so a big gap means they scrubbed — mirror it so both scrubbers
+    // match and resume starts from the same spot.
+    if (Math.abs(engine.currentTime - st.position) > SYNC_HARD_SEEK) {
+      engine.seek(Math.max(0, st.position))
+    }
     return
   }
   const sourceNow = performance.now() + clockOffset
@@ -970,11 +1107,12 @@ function syncTick(): void {
 function startTimers(): void {
   stopTimers()
   // Ping 1 Hz (keeps the clock offset fresh; RTT is tiny on a LAN) and broadcast source
-  // state 2 Hz (snappier re-alignment after a seek). The receiver's follower ticks 4 Hz.
+  // state 4 Hz — seeks/pauses also push state immediately, so the timer is a backstop.
+  // The receiver's follower ticks ~6.7 Hz. All trivial traffic on a LAN.
   pingTimer = window.setInterval(() => peer?.send({ t: 'ping', t0: performance.now() }), 1000)
   stateTimer = window.setInterval(() => {
     if (role === 'source') sendState()
-  }, 500)
+  }, 250)
   syncTimer = window.setInterval(syncTick, SYNC_TICK_MS)
   // Burst a handful of pings up front so the clock offset locks within ~1s, not ~12s.
   for (let i = 0; i < 6; i++) {
@@ -1039,9 +1177,13 @@ function teardown(): void {
   prevRemotePlaying = false
   syncNudging = false
   activatedTransferId = 0
+  seekGuardAtClock = 0
   engine.setPlaybackRate(1) // drop any sync tempo nudge
   currentTransferId = 0
   peerHasNext = false
+  srcCoverCache.clear()
+  rxCoverCache.clear()
+  activeSrcId = null
 
   applyingRemote = true
   if (wasReceiver) {
@@ -1066,6 +1208,7 @@ function teardown(): void {
     role: null,
     peerQueue: [],
     peerHorizon: [],
+    remoteCoverUrl: null,
     incoming: null // a caller that bailed shouldn't leave a stale Allow/Deny prompt up
   })
 }

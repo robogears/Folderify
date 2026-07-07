@@ -1,5 +1,6 @@
 import type { JSX } from 'react'
 import { coverUrl } from '@shared/ipc'
+import { useListen } from '../state/listen-store'
 
 interface CoverProps {
   trackId: string | null | undefined
@@ -11,9 +12,15 @@ interface CoverProps {
 /**
  * Album-art image served lazily through the cover:// protocol. Missing thumbnails
  * resolve to a generated placeholder by the protocol handler, so this never errors.
+ * Remote (Listen Together) tracks render the peer-streamed cover instead — the
+ * selector returns null for every local id, so library rows never re-render on it.
  */
 export function Cover({ trackId, hasArt = true, size = 'sm', className }: CoverProps): JSX.Element {
-  const src = trackId && hasArt ? coverUrl(trackId, size) : coverUrl('placeholder', size)
+  const remoteArt = useListen((s) =>
+    trackId && trackId.startsWith('remote:') ? s.remoteCoverUrl : null
+  )
+  const src =
+    remoteArt ?? (trackId && hasArt ? coverUrl(trackId, size) : coverUrl('placeholder', size))
   return (
     <img
       src={src}

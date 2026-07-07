@@ -503,10 +503,22 @@ the receiver plays its own copy, kept in lockstep by a clock-synced control prot
   buffers ICE candidates until the remote description is set (else a dropped candidate silently
   kills the connection) and ignores transient `disconnected`. `console.info('[listen] …')` traces
   every hop (ICE state, channel open, transfer start/finish) for device debugging.
-- **Still needs two-Mac device testing** (can't be exercised in one process) and **no receiver
-  cover art yet** (synthetic track `hasArt:false` → placeholder). A Mac is discoverable/connectable
-  whenever Folderify is **running** (net is app-lifetime, not panel-gated) — trusted peers connect
-  with no interaction; untrusted ones auto-open the Allow/Deny prompt.
+- **Receiver cover art** streams from the source: a `cover` control frame (JPEG base64, read via
+  `listen:read-cover` from the source's own thumbs dir, lg→sm fallback, ≤`LISTEN_COVER_MAX_BYTES`)
+  rides behind every `load` and `prefetch`. The receiver caches data URLs per srcId
+  (`LISTEN_COVER_CACHE_MAX`) and renders via `listen-store.remoteCoverUrl` — consumed by `Cover.tsx`
+  (remote-id override; selector returns null for local ids so library rows never re-render) and
+  `media-session.ts` (macOS Now Playing widget, refreshed when late art lands). The synthetic
+  remote track stays `hasArt:false` (the mini-player window can't see the main window's store, so
+  it shows the placeholder).
+- **Seek/scrub responsiveness**: the source detects its own scrubs as position discontinuities in
+  `onPlayerChange` (>0.35s beyond wall-clock drift, paused scrubs included) and broadcasts `state`
+  immediately — the 4Hz state timer is only a backstop. A receiver scrub optimistically rewrites
+  `lastRemoteState` in `relay` so the follower can't yank playback back before the source's echo
+  (~1 RTT) lands. Paused receivers mirror >250ms source scrubs with a seek.
+- A Mac is discoverable/connectable whenever Folderify is **running** (net is app-lifetime, not
+  panel-gated) — trusted peers connect with no interaction; untrusted ones auto-open the Allow/Deny
+  prompt.
 
 ---
 

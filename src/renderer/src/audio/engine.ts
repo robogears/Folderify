@@ -19,6 +19,8 @@ class AudioEngine {
   private audio: HTMLAudioElement
   private handlers: Partial<EngineHandlers> = {}
   private durationFixTried = false
+  private durationFixActive = false
+  private durationFixSeeked: (() => void) | null = null
   private rafId = 0
   private lastEmit = 0
 
@@ -39,6 +41,10 @@ class AudioEngine {
     })
     this.audio.addEventListener('error', () => {
       this.stopRaf()
+      // A track that errors mid duration-fix never fires 'seeked'; clear the flag here so
+      // durationFixInProgress can't stick true (which would permanently mute Listen state
+      // broadcasts on a source whose next action isn't a load()).
+      this.clearDurationFix()
       const code = this.audio.error?.code
       this.handlers.onError?.(`Could not play this track (code ${code ?? '?'})`)
     })
@@ -55,23 +61,43 @@ class AudioEngine {
     } else if (d === Infinity && !this.durationFixTried) {
       // Some VBR streams report Infinity until you seek to the end once.
       this.durationFixTried = true
+      this.durationFixActive = true
       const onSeeked = (): void => {
-        this.audio.removeEventListener('seeked', onSeeked)
+        this.clearDurationFix()
         this.audio.currentTime = 0
         const real = this.audio.duration
         if (Number.isFinite(real) && real > 0) this.handlers.onDuration?.(real)
       }
+      this.durationFixSeeked = onSeeked
       this.audio.addEventListener('seeked', onSeeked)
       try {
         this.audio.currentTime = 1e101
       } catch {
-        /* ignore */
+        this.clearDurationFix()
       }
     }
   }
 
+  /** Detach any mid-flight duration-fix listener and drop the flag. Called when the fix
+   *  completes AND on every new load — a stale 'seeked' listener from a replaced track
+   *  would otherwise fire on the NEXT track's first seek and yank it to 0. */
+  private clearDurationFix(): void {
+    if (this.durationFixSeeked) {
+      this.audio.removeEventListener('seeked', this.durationFixSeeked)
+      this.durationFixSeeked = null
+    }
+    this.durationFixActive = false
+  }
+
+  /** True while the VBR Infinity-duration fix is mid-flight (currentTime is transient
+   *  garbage — Listen Together must not broadcast it as playback state). */
+  get durationFixInProgress(): boolean {
+    return this.durationFixActive
+  }
+
   load(url: string): void {
     this.durationFixTried = false
+    this.clearDurationFix()
     this.audio.playbackRate = 1 // clear any leftover Listen-sync tempo nudge
     this.audio.src = url
     this.audio.load()
@@ -84,6 +110,7 @@ class AudioEngine {
    */
   loadRemote(url: string, startTime: number, autoplay: boolean): void {
     this.durationFixTried = false
+    this.clearDurationFix()
     this.audio.playbackRate = 1 // fresh track starts at reference tempo; sync re-nudges
     this.audio.src = url
     this.audio.load()
@@ -104,6 +131,7 @@ class AudioEngine {
   /** Load a track WITHOUT playing, seeking to startTime once metadata is ready. */
   prepare(url: string, startTime: number): void {
     this.durationFixTried = false
+    this.clearDurationFix()
     this.audio.playbackRate = 1
     this.audio.src = url
     this.audio.load()

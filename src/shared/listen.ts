@@ -100,6 +100,9 @@ export type ControlMsg =
   | { t: 'queue-notice'; items: QueueItem[] }
   /** Source → receiver: the next ~20 tracks in play order (drives display + prefetch). */
   | { t: 'horizon'; items: HorizonItem[] }
+  /** Source → receiver: a track's album art (JPEG, base64). Sent alongside `load` and
+   *  `prefetch` so the receiver can render cover art for streamed tracks. */
+  | { t: 'cover'; srcId: string; b64: string }
   | { t: 'bye' }
 
 /** LAN discovery beacon group + port (link-local multicast, TTL 1). */
@@ -124,6 +127,13 @@ export const LISTEN_PREFETCH_COUNT = 5
 /** Receiver prefetch-cache caps (LRU eviction past either limit). */
 export const LISTEN_CACHE_MAX_ENTRIES = 8
 export const LISTEN_CACHE_MAX_BYTES = 256 * 1024 * 1024
+/** Cover-art transfer caps: raw thumb bytes read on the source, and the base64 string
+ *  the receiver will accept (~4/3 of raw + slack). Comfortably under the ~256 KB SCTP
+ *  message ceiling so a cover always fits ONE control frame. */
+export const LISTEN_COVER_MAX_BYTES = 160 * 1024
+export const LISTEN_COVER_MAX_B64 = 224 * 1024
+/** How many covers the receiver keeps decoded (data URLs, tiny). */
+export const LISTEN_COVER_CACHE_MAX = 24
 
 /** Identity + reachability returned when advertising starts. */
 export interface ListenIdentity {

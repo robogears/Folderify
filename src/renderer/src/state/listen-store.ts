@@ -41,6 +41,8 @@ interface ListenState {
   peerQueue: QueueItem[]
   /** The source's upcoming play order (next ~20; drives display + prefetch). */
   peerHorizon: HorizonItem[]
+  /** Album art (data URL) for the remote track we're rendering, streamed by the source. */
+  remoteCoverUrl: string | null
 
   openPanel: () => void
   closePanel: () => void
@@ -69,6 +71,7 @@ export const useListen = create<ListenState>((set, get) => ({
   error: null,
   peerQueue: [],
   peerHorizon: [],
+  remoteCoverUrl: null,
 
   openPanel: () => {
     set({ panelOpen: true })

@@ -32,6 +32,8 @@ export interface FolderifyListenApi {
   sendSignal(payload: SignalPayload): void
   /** Read a track's bytes (confined to the library root) for the source to stream. */
   readTrack(path: string): Promise<ArrayBuffer | null>
+  /** Read a track's album-art thumbnail (JPEG bytes) to stream cover art to the peer. */
+  readCover(trackId: string): Promise<ArrayBuffer | null>
   onPeers(cb: (peers: ListenPeer[]) => void): Unsubscribe
   /** A not-yet-trusted peer is asking to connect — show the Allow/Deny prompt. */
   onIncoming(cb: (peer: ListenPeer) => void): Unsubscribe

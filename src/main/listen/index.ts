@@ -12,7 +12,12 @@ import path from 'node:path'
 import { Discovery } from './discovery'
 import { Signaling } from './signaling'
 import { safeResolveUnder } from '../path-safety'
-import { LISTEN_MAX_TRANSFER, LISTEN_SIG_PORT, type ListenPeer } from '../../shared/listen'
+import {
+  LISTEN_COVER_MAX_BYTES,
+  LISTEN_MAX_TRANSFER,
+  LISTEN_SIG_PORT,
+  type ListenPeer
+} from '../../shared/listen'
 
 interface Identity {
   id: string
@@ -83,6 +88,24 @@ export function registerListen(
       /* ignore */
     }
   }
+
+  // Read a track's album-art thumbnail for the source to stream (JPEG from the app's own
+  // thumbs dir — id is hex-validated so the path can't traverse). lg preferred; falls back
+  // to sm when lg is missing or too big to fit one data-channel frame.
+  ipcMain.handle('listen:read-cover', async (_e, id: unknown) => {
+    if (typeof id !== 'string' || !/^[0-9a-f]{8,64}$/i.test(id)) return null
+    const dir = path.join(app.getPath('userData'), 'thumbs')
+    for (const size of ['lg', 'sm'] as const) {
+      try {
+        const buf = await readFile(path.join(dir, `${id}_${size}.jpg`))
+        if (buf.byteLength === 0 || buf.byteLength > LISTEN_COVER_MAX_BYTES) continue
+        return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
+      } catch {
+        /* try the next size */
+      }
+    }
+    return null
+  })
 
   // Read a track's bytes for the source to stream (main owns disk; confined to root).
   ipcMain.handle('listen:read-track', async (_e, p: unknown) => {
